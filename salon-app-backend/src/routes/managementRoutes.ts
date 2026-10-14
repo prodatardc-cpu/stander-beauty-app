@@ -1,0 +1,45 @@
+import { Router } from 'express';
+import { appointmentController } from '../controllers/appointmentController';
+import { attendanceController } from '../controllers/attendanceController';
+import { expenseController } from '../controllers/expenseController';
+import { reportController } from '../controllers/reportController';
+import { resourceController } from '../controllers/resourceController';
+import { authMiddleware, requireRole } from '../middleware/authMiddleware';
+
+const router = Router();
+const adminOnly = requireRole(['admin']);
+
+router.use(authMiddleware);
+router.get('/staff', resourceController.listStaff);
+router.post('/staff', adminOnly, resourceController.createStaff);
+router.patch('/staff/:id', adminOnly, resourceController.updateStaff);
+router.delete('/staff/:id', adminOnly, resourceController.deleteStaff);
+router.get('/expenses', expenseController.list);
+router.post('/expenses', expenseController.create);
+router.delete('/expenses/:id', adminOnly, expenseController.remove);
+router.get('/attendance', attendanceController.listForDate);
+router.put('/attendance/:date', attendanceController.saveForDate);
+router.get('/products', resourceController.listProducts);
+router.post('/products', adminOnly, resourceController.createProduct);
+router.post('/products/:id/stock', adminOnly, resourceController.receiveProductStock);
+router.post('/products/:id/adjust', adminOnly, resourceController.adjustProductStock);
+router.get('/products/:id/movements', adminOnly, resourceController.listProductMovements);
+router.patch('/products/:id', adminOnly, resourceController.updateProduct);
+router.delete('/products/:id', adminOnly, resourceController.deleteProduct);
+router.get('/services', resourceController.listServices);
+router.post('/services', adminOnly, resourceController.createService);
+router.patch('/services/:id', adminOnly, resourceController.updateService);
+router.get('/appointments', appointmentController.list);
+router.post('/appointments', appointmentController.create);
+router.patch('/appointments/:id', appointmentController.update);
+router.delete('/appointments/:id', appointmentController.remove);
+router.get('/reports/overview', reportController.overview);
+router.get('/reports/archives', reportController.archives);
+router.post('/reports/close-day', reportController.closeDay);
+router.post('/reports/close-year', adminOnly, reportController.closeYear);
+router.get('/reports/period', reportController.byPeriod);
+router.get('/reports/staff/:staffId', reportController.byStaff);
+router.get('/reports/services/:serviceId', reportController.byService);
+router.get('/reports/products/:productId', reportController.byProduct);
+
+export default router;
