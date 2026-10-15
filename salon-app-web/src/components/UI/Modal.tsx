@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, type ReactNode } from 'react';
+import { useEffect, useEffectEvent, useId, useRef, type ReactNode } from 'react';
 
 interface ModalProps {
   title: string;
@@ -12,13 +12,14 @@ interface ModalProps {
 export const Modal = ({ title, description, onClose, children, footer, size = 'md' }: ModalProps) => {
   const titleId = useId();
   const panelRef = useRef<HTMLElement>(null);
+  const closeModal = useEffectEvent(() => onClose());
 
   useEffect(() => {
     const previousFocus = document.activeElement as HTMLElement | null;
     const firstField = panelRef.current?.querySelector<HTMLElement>('input, select, textarea, button:not(.modal-close)');
     (firstField ?? panelRef.current)?.focus();
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose();
+      if (event.key === 'Escape') closeModal();
     };
     document.addEventListener('keydown', onKeyDown);
     document.body.style.overflow = 'hidden';
@@ -27,7 +28,7 @@ export const Modal = ({ title, description, onClose, children, footer, size = 'm
       document.body.style.overflow = '';
       previousFocus?.focus();
     };
-  }, [onClose]);
+  }, []);
 
   return (
     <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>

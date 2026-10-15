@@ -1,7 +1,22 @@
-import { Commission, Sale, SaleItem, Staff } from '../models';
+import { sequelize } from '../config/database';
+import { Commission, CommissionPayment, Sale, SaleItem, Staff } from '../models';
 import { calculateCommission } from '../utils/helpers';
 import { Op } from 'sequelize';
 import type { Transaction } from 'sequelize';
+
+export class CommissionPaymentError extends Error {
+  readonly status: number;
+
+  constructor(status: number, message: string) {
+    super(message);
+    this.status = status;
+  }
+}
+
+// Amounts are DECIMAL(…, 2): settle them in integer cents to avoid floating-point drift.
+const toCents = (value: number | string) => Math.round(Number(value) * 100);
+
+type PaymentRequest = { staffId: string; amount: number; idempotencyKey: string; paidByUserId?: string | null };
 
 export const commissionService = {
   // Créer une commission pour une prestation
@@ -80,40 +95,60 @@ export const commissionService = {
     });
   },
 
-  // Payer les commissions d'un travailleur
-  payStaffCommissions: async (
-    staffId: string,
-    amount: number
-  ): Promise<{ paid: number; remaining: number }> => {
-    const unpaidCommissions = await Commission.findAll({
-      where: { staffId, paid: false },
-      order: [['date', 'ASC']],
-    });
+  // Payer les commissions d'un travailleur : les plus anciennes d'abord, tant que le montant les couvre.
+  // Safe against concurrent and repeated requests: payments of one staff member run one at a time
+  // (row lock), and a replayed idempotency key returns the original payment instead of paying again.
+  payStaffCommissions: async ({ staffId, amount, idempotencyKey, paidByUserId = null }: PaymentRequest) => {
+    const requested = toCents(amount);
+    try {
+      return await sequelize.transaction(async (transaction) => {
+        const staff = await Staff.findByPk(staffId, { transaction, lock: transaction.LOCK.UPDATE });
+        if (!staff) throw new CommissionPaymentError(404, 'Staff member not found');
 
-    let remaining = parseFloat(amount.toString());
-    let totalPaid = 0;
+        const previous = await CommissionPayment.findOne({ where: { idempotencyKey }, transaction });
+        if (previous) {
+          if (previous.staffId !== staffId || toCents(previous.requestedAmount) !== requested) {
+            throw new CommissionPaymentError(409, 'Idempotency key already used for another payment');
+          }
+          return { payment: previous, remaining: (requested - toCents(previous.amount)) / 100, replayed: true };
+        }
 
-    for (const commission of unpaidCommissions) {
-      if (remaining <= 0) break;
-
-      const commissionAmount = parseFloat(
-        commission.commissionAmount.toString()
-      );
-
-      if (remaining >= commissionAmount) {
-        await commission.update({
-          paid: true,
-          paymentDate: new Date(),
+        const unpaid = await Commission.findAll({
+          where: { staffId, paid: false },
+          order: [['date', 'ASC'], ['id', 'ASC']],
+          transaction,
+          lock: transaction.LOCK.UPDATE,
         });
-        remaining -= commissionAmount;
-        totalPaid += commissionAmount;
-      }
-    }
+        let left = requested;
+        const settled: Commission[] = [];
+        for (const commission of unpaid) {
+          if (left <= 0) break;
+          const due = toCents(commission.commissionAmount);
+          if (due <= left) {
+            settled.push(commission);
+            left -= due;
+          }
+        }
+        if (!settled.length) throw new CommissionPaymentError(409, 'No unpaid commission is covered by this amount');
 
-    return {
-      paid: parseFloat(totalPaid.toFixed(2)),
-      remaining: parseFloat(remaining.toFixed(2)),
-    };
+        const payment = await CommissionPayment.create({
+          staffId, amount: (requested - left) / 100, requestedAmount: requested / 100,
+          commissionCount: settled.length, idempotencyKey, paidByUserId,
+        }, { transaction });
+        const [updated] = await Commission.update(
+          { paid: true, paymentDate: payment.createdAt, paymentId: payment.id },
+          { where: { id: settled.map((commission) => commission.id), paid: false }, transaction }
+        );
+        if (updated !== settled.length) throw new Error('Commissions changed during the payment');
+        return { payment, remaining: left / 100, replayed: false };
+      });
+    } catch (error) {
+      // Same key sent concurrently for another staff member: the unique index rejected the second one.
+      if (error instanceof Error && error.name === 'SequelizeUniqueConstraintError') {
+        throw new CommissionPaymentError(409, 'Idempotency key already used for another payment');
+      }
+      throw error;
+    }
   },
 
   // Vérifier la validité des commissions (audit)

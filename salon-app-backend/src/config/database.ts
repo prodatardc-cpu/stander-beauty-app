@@ -1,7 +1,7 @@
 import path from 'node:path';
 import { existsSync } from 'node:fs';
 import dotenv from 'dotenv';
-import { DataTypes, Sequelize } from 'sequelize';
+import { Sequelize } from 'sequelize';
 
 const envPath =
   process.env.ENV_FILE ??
@@ -9,7 +9,7 @@ const envPath =
     existsSync
   );
 
-dotenv.config({ path: envPath });
+dotenv.config({ path: envPath, quiet: true });
 
 const databasePassword = process.env.DB_PASSWORD;
 
@@ -29,33 +29,8 @@ export const sequelize = new Sequelize(
   }
 );
 
+// Only checks that the database answers: the schema is managed by versioned migrations (src/db).
 export const connectDB = async () => {
   await sequelize.authenticate();
   console.log('Database connected');
-  await sequelize.sync();
-  await sequelize.query('ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "authVersion" INTEGER NOT NULL DEFAULT 0');
-  const queryInterface = sequelize.getQueryInterface();
-  const saleColumns = await queryInterface.describeTable('sales');
-  if (!saleColumns.currency) {
-    await queryInterface.addColumn('sales', 'currency', { type: DataTypes.STRING(3), allowNull: true });
-  }
-  if (!saleColumns.exchangeRateUsed) {
-    await queryInterface.addColumn('sales', 'exchangeRateUsed', { type: DataTypes.DECIMAL(12, 4), allowNull: true });
-  }
-  const productColumns = await queryInterface.describeTable('products');
-  if (!productColumns.lowStockThreshold) {
-    await queryInterface.addColumn('products', 'lowStockThreshold', { type: DataTypes.INTEGER, allowNull: false, defaultValue: 5 });
-  }
-  if (!productColumns.quantityReceived) {
-    await queryInterface.addColumn('products', 'quantityReceived', { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 });
-    await sequelize.query('UPDATE "products" SET "quantityReceived" = "quantityStock"');
-  }
-  if (!productColumns.status) {
-    await queryInterface.addColumn('products', 'status', { type: DataTypes.STRING, allowNull: false, defaultValue: 'active' });
-  }
-  await sequelize.query('ALTER TABLE "sales" ALTER COLUMN "clientId" DROP NOT NULL');
-  await sequelize.query('ALTER TABLE "sales" ALTER COLUMN "staffId" DROP NOT NULL');
-  await sequelize.query('ALTER TABLE "sales" ADD COLUMN IF NOT EXISTS "clientName" VARCHAR(255)');
-  await sequelize.query('ALTER TABLE "staff" ADD COLUMN IF NOT EXISTS "photoUrl" TEXT');
-  console.log('Models synchronized');
 };

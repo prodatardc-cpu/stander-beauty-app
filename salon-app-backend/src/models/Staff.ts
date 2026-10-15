@@ -10,6 +10,7 @@ export class Staff extends Model {
   declare status: 'active' | 'inactive';
   declare workingHours: unknown;
   declare commissionRate: number;
+  declare archivedAt: Date | null;
 }
 
 Staff.init(
@@ -46,6 +47,11 @@ Staff.init(
     commissionRate: {
       type: DataTypes.DECIMAL(5, 2),
       defaultValue: 40,
+    },
+    // Set when an administrator removes a member who has history (sales, commissions, attendance).
+    archivedAt: {
+      type: DataTypes.DATE,
+      allowNull: true,
     },
   },
   {

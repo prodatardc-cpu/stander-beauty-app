@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import type { ReportArchive } from '../types';
 import { apiClient } from '../services/api';
 import { formatCurrency, useCurrency } from '../services/currency';
+import { useCan, useIsAdmin } from '../hooks/useAuth';
 import { useFeedback } from '../components/UI/Feedback';
 import { PageHeader } from '../components/UI/PageHeader';
 
@@ -53,6 +54,8 @@ const getRange = (kind: ReportKind, selection: string) => {
 export const ReportsPage = () => {
   const currency = useCurrency();
   const { confirm } = useFeedback();
+  const canCloseDay = useCan('closeDay');
+  const canCloseYear = useIsAdmin();
   const [kind, setKind] = useState<ReportKind>('daily');
   const [selection, setSelection] = useState(today);
   const [report, setReport] = useState<PeriodReport | null>(null);
@@ -146,8 +149,8 @@ export const ReportsPage = () => {
 
     <div className="flex flex-wrap items-end justify-between gap-4 border-b border-gray-200 pb-5">
       <label className="space-y-1 text-sm font-medium text-gray-700">{kind === 'daily' ? 'Journée' : kind === 'weekly' ? 'Semaine du' : kind === 'monthly' ? 'Mois' : 'Année'}<input type={kind === 'daily' || kind === 'weekly' ? 'date' : kind === 'monthly' ? 'month' : 'number'} min={kind === 'annual' ? '2000' : undefined} max={kind === 'annual' ? currentYear : undefined} value={selection} onChange={(event) => setSelection(event.target.value)} className="block rounded border border-gray-300 bg-white px-3 py-2 font-normal" /></label>
-      {kind === 'daily' && <button type="button" disabled={saving || Boolean(dayArchive)} onClick={() => void closeDay()} className="rounded bg-orange-700 px-4 py-2 text-sm text-white hover:bg-orange-800 disabled:opacity-50">{dayArchive ? 'Journée archivée' : saving ? 'Clôture…' : 'Clôturer la journée'}</button>}
-      {kind === 'annual' && <button type="button" disabled={saving || !selectedYearCanClose || Boolean(yearArchive)} onClick={() => void closeYear()} className="rounded bg-orange-700 px-4 py-2 text-sm text-white hover:bg-orange-800 disabled:opacity-50">{yearArchive ? 'Exercice archivé' : saving ? 'Clôture…' : 'Clôturer et archiver l’exercice'}</button>}
+      {kind === 'daily' && canCloseDay && <button type="button" disabled={saving || Boolean(dayArchive)} onClick={() => void closeDay()} className="rounded bg-orange-700 px-4 py-2 text-sm text-white hover:bg-orange-800 disabled:opacity-50">{dayArchive ? 'Journée archivée' : saving ? 'Clôture…' : 'Clôturer la journée'}</button>}
+      {kind === 'annual' && canCloseYear && <button type="button" disabled={saving || !selectedYearCanClose || Boolean(yearArchive)} onClick={() => void closeYear()} className="rounded bg-orange-700 px-4 py-2 text-sm text-white hover:bg-orange-800 disabled:opacity-50">{yearArchive ? 'Exercice archivé' : saving ? 'Clôture…' : 'Clôturer et archiver l’exercice'}</button>}
     </div>
 
     {error && <p role="alert" className="text-sm text-red-700">{error}</p>}

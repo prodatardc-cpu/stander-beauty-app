@@ -1,6 +1,7 @@
 import { useEffect, useState, type ChangeEvent } from 'react';
 import type { Staff, StaffAttendance } from '../types';
 import { apiClient } from '../services/api';
+import { useCan } from '../hooks/useAuth';
 import { useFeedback } from '../components/UI/Feedback';
 import { Avatar, PageHeader } from '../components/UI/PageHeader';
 
@@ -37,6 +38,7 @@ export const AttendancePage = () => {
   const [error, setError] = useState('');
   const [saved, setSaved] = useState(false);
   const { notify } = useFeedback();
+  const canRecord = useCan('recordAttendance');
 
   useEffect(() => {
     let active = true;
@@ -116,11 +118,12 @@ export const AttendancePage = () => {
           <h2 className="font-semibold capitalize text-gray-900">{formatDate(selectedDate)}</h2>
           <p className="mt-1 text-sm text-gray-600">{presentCount} présent(s) · {absentCount} absent(s) · {staff.length - presentCount - absentCount} à renseigner</p>
         </div>
-        <button type="button" onClick={() => void saveAttendance()} disabled={loading || saving || !staff.length} className="btn btn-primary">
+        {canRecord && <button type="button" onClick={() => void saveAttendance()} disabled={loading || saving || !staff.length} className="btn btn-primary">
           {saving ? 'Enregistrement…' : saved ? 'Présences enregistrées' : 'Enregistrer la journée'}
-        </button>
+        </button>}
       </div>
 
+      {!canRecord && <p role="status" className="text-sm text-gray-600">Consultation seule : les présences sont enregistrées par l’administrateur ou la caisse.</p>}
       {error && <p role="alert" className="text-sm text-red-700">{error}</p>}
       {loading ? <p className="py-8 text-sm text-gray-600">Chargement…</p> : (
         <div className="divide-y divide-gray-200 border-y border-gray-200">
@@ -132,7 +135,7 @@ export const AttendancePage = () => {
               </div>
               <div role="group" aria-label={`Présence de ${member.name}`} className="flex rounded border border-gray-300 p-0.5">
                 {(['present', 'absent'] as const).map((status) => (
-                  <button key={status} type="button" aria-pressed={attendance[member.id] === status} onClick={() => setMemberStatus(member.id, status)} className={`rounded px-3 py-1.5 text-sm ${attendance[member.id] === status ? status === 'present' ? 'bg-green-100 font-semibold text-green-800' : 'bg-red-100 font-semibold text-red-800' : 'text-gray-600 hover:bg-gray-50'}`}>
+                  <button key={status} type="button" disabled={!canRecord} aria-pressed={attendance[member.id] === status} onClick={() => setMemberStatus(member.id, status)} className={`rounded px-3 py-1.5 text-sm ${attendance[member.id] === status ? status === 'present' ? 'bg-green-100 font-semibold text-green-800' : 'bg-red-100 font-semibold text-red-800' : 'text-gray-600 hover:bg-gray-50'}`}>
                     {status === 'present' ? 'Présent' : 'Absent'}
                   </button>
                 ))}

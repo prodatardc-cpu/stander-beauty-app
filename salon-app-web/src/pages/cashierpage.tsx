@@ -50,7 +50,8 @@ export const CashierPage = () => {
   // Fetches everything the till needs and returns a function that applies it to state.
   const fetchAll = useCallback(async () => {
     const [clientResponse, staffResponse, productResponse, serviceResponse, salesResponse, expenseResponse] = await Promise.all([
-      apiClient.get<Client[]>('/clients'), apiClient.get<Staff[]>('/staff'),
+      // Archived clients are kept to name past sales; they are not offered for new ones.
+      apiClient.get<Client[]>('/clients', { includeArchived: 'true' }), apiClient.get<Staff[]>('/staff'),
       apiClient.get<Product[]>('/products'), apiClient.get<Service[]>('/services'),
       apiClient.get<Sale[]>('/sales'),
       apiClient.get<Expense[]>('/expenses'),
@@ -301,7 +302,7 @@ export const CashierPage = () => {
             <label className="field">Client enregistré
               <select value={clientId} onChange={(event) => { setClientId(event.target.value); if (event.target.value) setGuestClientName(''); }}>
                 <option value="">Aucun</option>
-                {clients.map((entry) => <option key={entry.id} value={entry.id}>{entry.name} · {entry.phone}</option>)}
+                {clients.filter((entry) => !entry.archivedAt).map((entry) => <option key={entry.id} value={entry.id}>{entry.name} · {entry.phone}</option>)}
               </select>
             </label>
             <label className="field">Ou client de passage<input placeholder="Nom (facultatif)" value={guestClientName} onChange={(event) => { setGuestClientName(event.target.value); if (event.target.value) setClientId(''); }} /></label>

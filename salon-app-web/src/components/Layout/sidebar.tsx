@@ -1,4 +1,5 @@
 import { Link, NavLink } from 'react-router-dom';
+import { BrandMark } from '../Common/BrandMark';
 
 const navigationGroups = [
   {
@@ -31,10 +32,10 @@ export const pageTitles: Record<string, string> = Object.fromEntries([
 export const Sidebar = () => (
   <aside className="studio-sidebar">
     <Link to="/dashboard" className="studio-brand" aria-label="Stander Beauty, accueil">
-      <img className="studio-monogram" src="/salon-mark.svg" alt="" />
+      <BrandMark className="studio-monogram" />
       <span className="studio-brand-copy">
         <strong>Stander Beauty</strong>
-        <small>Bunglon Cript</small>
+        <small>Votre beauté, notre signature</small>
       </span>
     </Link>
     <nav className="studio-navigation" aria-label="Navigation principale">

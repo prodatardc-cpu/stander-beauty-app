@@ -246,21 +246,31 @@ export const reportService = {
     let todayProductRevenueCDF = 0;
     let amountReceivedTodayUSD = 0;
     let amountReceivedTodayCDF = 0;
+    let salesTodayUSDCount = 0;
+    let salesTodayCDFCount = 0;
+    let unclassifiedSalesToday = 0;
     for (const sale of todaySales) {
-      if (sale.currency === 'CDF') amountReceivedTodayCDF += Number(sale.amountPaid);
-      else amountReceivedTodayUSD += Number(sale.amountPaid);
+      if (sale.currency === 'CDF') {
+        amountReceivedTodayCDF += Number(sale.amountPaid);
+        salesTodayCDFCount += 1;
+      } else if (sale.currency === 'USD') {
+        amountReceivedTodayUSD += Number(sale.amountPaid);
+        salesTodayUSDCount += 1;
+      } else {
+        unclassifiedSalesToday += 1;
+      }
       for (const item of (sale as any).items) {
         const itemRevenue = parseFloat(item.subtotal.toString());
         if (item.type === 'service') {
           todayServiceCount += item.quantity;
           todayServiceRevenue += itemRevenue;
           if (sale.currency === 'CDF') todayServiceRevenueCDF += itemRevenue;
-          else todayServiceRevenueUSD += itemRevenue;
+          else if (sale.currency === 'USD') todayServiceRevenueUSD += itemRevenue;
         } else if (item.type === 'product') {
           todayProductCount += item.quantity;
           todayProductRevenue += itemRevenue;
           if (sale.currency === 'CDF') todayProductRevenueCDF += itemRevenue;
-          else todayProductRevenueUSD += itemRevenue;
+          else if (sale.currency === 'USD') todayProductRevenueUSD += itemRevenue;
         }
       }
     }
@@ -292,6 +302,9 @@ export const reportService = {
       todayRevenue: parseFloat((todayServiceRevenue + todayProductRevenue).toFixed(2)),
       todayRevenueUSD: parseFloat(amountReceivedTodayUSD.toFixed(2)),
       todayRevenueCDF: parseFloat(amountReceivedTodayCDF.toFixed(2)),
+      salesTodayUSDCount,
+      salesTodayCDFCount,
+      unclassifiedSalesToday,
       amountReceivedTodayUSD: parseFloat(amountReceivedTodayUSD.toFixed(2)),
       amountReceivedTodayCDF: parseFloat(amountReceivedTodayCDF.toFixed(2)),
       todayServiceRevenueUSD: parseFloat(todayServiceRevenueUSD.toFixed(2)),

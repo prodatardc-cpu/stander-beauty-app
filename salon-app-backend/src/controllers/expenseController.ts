@@ -1,8 +1,12 @@
 import type { Request, Response } from 'express';
 import { Op } from 'sequelize';
 import { Expense } from '../models';
+import { isText } from '../utils/validators';
 
 const paymentMethods = ['cash', 'momo', 'card', 'transfer', 'other'];
+// amount is DECIMAL(10, 2).
+const maxAmount = 99_999_999.99;
+const hasAtMostTwoDecimals = (value: number) => Math.abs(Math.round(value * 100) - value * 100) < 1e-6;
 
 export const expenseController = {
   list: async (req: Request, res: Response) => {
@@ -23,8 +27,9 @@ export const expenseController = {
 
   create: async (req: Request, res: Response) => {
     const { description, category, amount, paymentMethod } = req.body ?? {};
-    if (typeof description !== 'string' || !description.trim() || typeof category !== 'string' || !category.trim() ||
-        !Number.isFinite(Number(amount)) || Number(amount) <= 0 || !paymentMethods.includes(paymentMethod)) {
+    if (!isText(description, 255) || !isText(category, 100) || typeof amount === 'boolean' ||
+        !Number.isFinite(Number(amount)) || Number(amount) <= 0 || Number(amount) > maxAmount || !hasAtMostTwoDecimals(Number(amount)) ||
+        !paymentMethods.includes(paymentMethod)) {
       return res.status(400).json({ error: 'Description, category, positive amount and payment method are required' });
     }
     try {

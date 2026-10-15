@@ -1,9 +1,9 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { useDispatch } from 'react-redux';
 import { useNavigate } from 'react-router-dom';
-import type { User } from '../types';
+import type { Staff, User } from '../types';
 import { logout, setUser } from '../redux/slices/authSlice';
-import { apiClient, getApiError } from '../services/api';
+import { apiClient, checkApiStatus, getApiError } from '../services/api';
 import { setCurrency, setExchangeRate, useCurrency, useExchangeRate } from '../services/currency';
 import { formatDate, roleLabels } from '../utils/format';
 import { useCurrentUser } from '../hooks/useAuth';
@@ -22,10 +22,11 @@ export const SettingsPage = () => {
   const currency = useCurrency();
   const exchangeRate = useExchangeRate();
   const { notify, confirm } = useFeedback();
-  const [apiStatus, setApiStatus] = useState<'loading' | 'online' | 'offline'>('loading');
+  const [apiStatus, setApiStatus] = useState<'loading' | 'online' | 'degraded' | 'offline'>('loading');
   const [passwords, setPasswords] = useState(emptyPasswords);
   const [savingPassword, setSavingPassword] = useState(false);
   const [users, setUsers] = useState<User[]>([]);
+  const [teamMembers, setTeamMembers] = useState<Staff[]>([]);
   const isAdmin = user?.role === 'admin';
   const [account, setAccount] = useState<typeof emptyAccount | null>(null);
   const [resetTarget, setResetTarget] = useState<User | null>(null);
@@ -38,14 +39,13 @@ export const SettingsPage = () => {
   }, [exchangeRate]);
 
   useEffect(() => {
-    apiClient.get<{ message: string }>('/health')
-      .then(() => setApiStatus('online'))
-      .catch(() => setApiStatus('offline'));
+    void checkApiStatus().then(setApiStatus);
   }, []);
 
   useEffect(() => {
     if (!isAdmin) return;
     apiClient.get<User[]>('/auth/users').then(({ data }) => setUsers(data)).catch(() => setUsers([]));
+    apiClient.get<Staff[]>('/staff', { includeArchived: 'true' }).then(({ data }) => setTeamMembers(data)).catch(() => setTeamMembers([]));
   }, [isAdmin]);
 
   const changePassword = async (event: FormEvent) => {
@@ -68,7 +68,7 @@ export const SettingsPage = () => {
     }
   };
 
-  const updateUser = async (target: User, changes: Partial<Pick<User, 'role' | 'status'>>) => {
+  const updateUser = async (target: User, changes: Partial<Pick<User, 'role' | 'status' | 'staffId'>>) => {
     try {
       const { data } = await apiClient.patch<User>(`/auth/users/${target.id}`, changes);
       setUsers((current) => current.map((entry) => entry.id === data.id ? data : entry));
@@ -145,7 +145,7 @@ export const SettingsPage = () => {
 
     <div className="grid gap-6 lg:grid-cols-2">
       <section className="panel">
-        <div className="panel-header"><h2 className="section-title">Mon compte</h2><span className={`badge ${apiStatus === 'online' ? 'badge-success' : apiStatus === 'offline' ? 'badge-danger' : ''}`}>API {apiStatus === 'online' ? 'connectée' : apiStatus === 'offline' ? 'indisponible' : '…'}</span></div>
+        <div className="panel-header"><h2 className="section-title">Mon compte</h2><span className={`badge ${apiStatus === 'online' ? 'badge-success' : apiStatus === 'loading' ? '' : 'badge-danger'}`}>{apiStatus === 'online' ? 'API connectée' : apiStatus === 'degraded' ? 'Base de données indisponible' : apiStatus === 'offline' ? 'API indisponible' : 'API …'}</span></div>
         <div className="list-rows">
           <div className="list-row"><span className="text-gray-600">Adresse e-mail</span><span className="cell-title">{user?.email ?? '—'}</span></div>
           <div className="list-row"><span className="text-gray-600">Rôle</span><span className="cell-title">{user ? roleLabels[user.role] : '—'}</span></div>
@@ -185,12 +185,12 @@ export const SettingsPage = () => {
 
     {isAdmin && <section className="space-y-3">
       <div className="flex flex-wrap items-end justify-between gap-3">
-        <div><h2 className="section-title">Comptes utilisateurs</h2><p className="mt-1 max-w-3xl text-sm text-gray-600">Il n’existe qu’un seul compte administrateur. Les accès « Équipe » et « Caisse » sont créés ici ; ils peuvent encaisser, gérer clients, rendez-vous et présences, mais pas le catalogue, l’équipe ni les annulations.</p></div>
+        <div><h2 className="section-title">Comptes utilisateurs</h2><p className="mt-1 max-w-3xl text-sm text-gray-600">Il n’existe qu’un seul compte administrateur. Les accès « Caisse » et « Équipe » sont créés ici : tous deux encaissent et gèrent clients et rendez-vous ; la caisse enregistre aussi les présences et clôture la journée. Aucun ne gère le catalogue, l’équipe, les annulations ni le paiement des commissions. Reliez un accès à sa fiche de l’équipe pour qu’il consulte ses propres commissions.</p></div>
         <button type="button" className="btn btn-primary" onClick={() => setAccount(emptyAccount)}>Créer un accès</button>
       </div>
       <div className="overflow-x-auto">
         <table className="data-table">
-          <thead><tr><th>Compte</th><th>Créé le</th><th>Rôle</th><th>Accès</th><th className="actions">Mot de passe</th></tr></thead>
+          <thead><tr><th>Compte</th><th>Créé le</th><th>Rôle</th><th>Fiche équipe</th><th>Accès</th><th className="actions">Mot de passe</th></tr></thead>
           <tbody>{users.map((entry) => {
             const isSelf = entry.id === user?.id;
             const isAdminAccount = entry.role === 'admin';
@@ -201,6 +201,14 @@ export const SettingsPage = () => {
                 {isAdminAccount ? <span className="badge badge-accent">{roleLabels.admin}</span> : (
                   <select aria-label={`Rôle de ${entry.email}`} value={entry.role} onChange={(event) => void updateUser(entry, { role: event.target.value as User['role'] })} className="px-2 py-1 text-sm">
                     {assignableRoles.map((value) => <option key={value} value={value}>{roleLabels[value]}</option>)}
+                  </select>
+                )}
+              </td>
+              <td>
+                {isAdminAccount ? <span className="cell-sub">—</span> : (
+                  <select aria-label={`Fiche équipe de ${entry.email}`} value={entry.staffId ?? ''} onChange={(event) => void updateUser(entry, { staffId: event.target.value || null })} className="px-2 py-1 text-sm">
+                    <option value="">Aucune</option>
+                    {teamMembers.map((member) => <option key={member.id} value={member.id} disabled={Boolean(member.archivedAt)}>{member.name}{member.archivedAt ? ' (archivé)' : ''}</option>)}
                   </select>
                 )}
               </td>

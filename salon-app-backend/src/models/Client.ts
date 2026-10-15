@@ -11,6 +11,7 @@ export class Client extends Model {
   declare lastVisit?: Date;
   declare notes?: string;
   declare loyaltyPoints: number;
+  declare archivedAt: Date | null;
 }
 
 Client.init(
@@ -52,6 +53,11 @@ Client.init(
     loyaltyPoints: {
       type: DataTypes.INTEGER,
       defaultValue: 0,
+    },
+    // Set when an administrator removes a client who has history (sales, appointments).
+    archivedAt: {
+      type: DataTypes.DATE,
+      allowNull: true,
     },
   },
   {

@@ -8,7 +8,7 @@ export class User extends Model {
   declare passwordHash: string;
   declare role: 'admin' | 'staff' | 'cashier';
   declare status: 'active' | 'inactive';
-  declare staffId?: string;
+  declare staffId: string | null;
   declare authVersion: number;
   declare createdAt: Date;
   declare updatedAt: Date;

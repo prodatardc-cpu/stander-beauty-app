@@ -3,6 +3,8 @@ export interface User {
   email: string;
   role: "admin" | "staff" | "cashier";
   status: "active" | "inactive";
+  // Staff record linked by the administrator: gives access to that member's own commissions.
+  staffId?: string | null;
   createdAt?: string;
 }
 
@@ -16,6 +18,7 @@ export interface Client {
   lastVisit?: string;
   notes?: string;
   loyaltyPoints: number;
+  archivedAt?: string | null;
 }
 
 export interface Staff {
@@ -28,6 +31,7 @@ export interface Staff {
   commissionRate: number | string;
   payType: 'fixed' | 'commission';
   monthlySalary: number | string;
+  archivedAt?: string | null;
 }
 
 export interface StaffAttendance {

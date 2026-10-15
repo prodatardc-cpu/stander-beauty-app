@@ -1,4 +1,5 @@
 import { sequelize } from '../config/database';
+import { assertMigrationsApplied } from '../db/migrator';
 import { User } from '../models/User';
 
 const readHidden = (label: string): Promise<string> => {
@@ -34,7 +35,7 @@ const readHidden = (label: string): Promise<string> => {
 
 const resetAdminPassword = async () => {
   await sequelize.authenticate();
-  await sequelize.query('ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "authVersion" INTEGER NOT NULL DEFAULT 0');
+  await assertMigrationsApplied();
   await sequelize.transaction(async (transaction) => {
     const administrators = await User.findAll({
       where: { role: 'admin' },

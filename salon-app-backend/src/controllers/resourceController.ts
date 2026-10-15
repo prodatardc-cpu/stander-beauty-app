@@ -4,31 +4,80 @@ import { sequelize } from '../config/database';
 import { Appointment, Attendance, Commission, Product, Sale, SaleItem, Service, Staff, StockMovement, User } from '../models';
 import type { AuthRequest } from '../middleware/authMiddleware';
 import { stockService } from '../services/stockService';
+import { isOptionalText, isText, isUuid } from '../utils/validators';
 
 const routeId = (req: Request) => {
   const id = req.params.id;
   return typeof id === 'string' ? id : undefined;
 };
 
+const textLimits = { name: 120, phone: 40, position: 120, category: 80, description: 2000 };
+
+const isPhoto = (value: unknown) =>
+  typeof value === 'string' && value.startsWith('data:image/jpeg;base64,') && value.length <= 90000;
+
+const isRate = (value: unknown) => typeof value !== 'boolean' && value !== null && value !== '' &&
+  Number.isFinite(Number(value)) && Number(value) >= 0 && Number(value) <= 100;
+
+// Validates the fields of a staff member; `partial` for an update. Returns an error message or null.
+const staffFieldsError = (body: Record<string, unknown>, partial: boolean) => {
+  const allowed = ['name', 'phone', 'position', 'commissionRate', 'photoUrl', 'status'];
+  if (partial && Object.keys(body).some((field) => !allowed.includes(field) && !['payType', 'monthlySalary'].includes(field))) {
+    return 'Unknown staff fields';
+  }
+  for (const field of ['name', 'phone', 'position'] as const) {
+    if ((!partial || body[field] !== undefined) && !isText(body[field], textLimits[field])) return 'Name, phone and position are required';
+  }
+  if (body.commissionRate !== undefined && !isRate(body.commissionRate)) return 'Commission rate must be between 0 and 100';
+  if (body.photoUrl != null && body.photoUrl !== '' && !isPhoto(body.photoUrl)) return 'Photo must be a compressed JPEG smaller than 90 KB';
+  if (body.status !== undefined && !['active', 'inactive'].includes(String(body.status))) return 'Invalid status';
+  return null;
+};
+
+const serviceFieldsError = (body: Record<string, unknown>, partial: boolean) => {
+  const allowed = ['name', 'description', 'price', 'duration', 'category', 'status'];
+  if (partial && Object.keys(body).some((field) => !allowed.includes(field) && !['audience', 'womenPrice', 'menPrice'].includes(field))) {
+    return 'Unknown service fields';
+  }
+  if ((!partial || body.name !== undefined) && !isText(body.name, textLimits.name)) return 'Name, category, a valid price and duration are required';
+  if ((!partial || body.category !== undefined) && !isText(body.category, textLimits.category)) return 'Name, category, a valid price and duration are required';
+  if ((!partial || body.price !== undefined) && (typeof body.price === 'boolean' || !Number.isFinite(Number(body.price)) || Number(body.price) < 0 || Number(body.price) > 99_999_999)) {
+    return 'Name, category, a valid price and duration are required';
+  }
+  if ((!partial || body.duration !== undefined) && (!Number.isInteger(Number(body.duration)) || Number(body.duration) <= 0 || Number(body.duration) > 24 * 60)) {
+    return 'Name, category, a valid price and duration are required';
+  }
+  if (!isOptionalText(body.description, textLimits.description)) return 'Description is too long';
+  if (body.status !== undefined && !['active', 'inactive'].includes(String(body.status))) return 'Invalid status';
+  return null;
+};
+
+const trimmed = (value: unknown) => (typeof value === 'string' ? value.trim() : value);
+
+// Only the listed fields are written (no mass assignment of ids, timestamps or archive markers).
+const pick = (body: Record<string, unknown>, fields: string[]) =>
+  Object.fromEntries(fields.filter((field) => body[field] !== undefined).map((field) => [field, trimmed(body[field])]));
+
 export const resourceController = {
-  listStaff: async (_req: Request, res: Response) => {
+  listStaff: async (req: Request, res: Response) => {
     try {
-      res.json(await Staff.findAll({ order: [['name', 'ASC']] }));
+      // Archived members are hidden unless asked for (e.g. to label past sales).
+      const where = req.query.includeArchived === 'true' ? {} : { archivedAt: null };
+      res.json(await Staff.findAll({ where, order: [['name', 'ASC']] }));
     } catch {
       res.status(500).json({ error: 'Failed to fetch staff' });
     }
   },
 
   createStaff: async (req: Request, res: Response) => {
-    const { name, phone, position, commissionRate, photoUrl } = req.body;
-    if (typeof name !== 'string' || typeof phone !== 'string' || typeof position !== 'string') {
-      return res.status(400).json({ error: 'Name, phone and position are required' });
-    }
-    if (photoUrl != null && (typeof photoUrl !== 'string' || !photoUrl.startsWith('data:image/jpeg;base64,') || photoUrl.length > 90000)) {
-      return res.status(400).json({ error: 'Photo must be a compressed JPEG smaller than 90 KB' });
-    }
+    const body = req.body ?? {};
+    const invalid = staffFieldsError(body, false);
+    if (invalid) return res.status(400).json({ error: invalid });
     try {
-      const staff = await Staff.create({ name: name.trim(), phone: phone.trim(), position: position.trim(), commissionRate, photoUrl: photoUrl || null });
+      const staff = await Staff.create({
+        ...pick(body, ['name', 'phone', 'position', 'commissionRate']),
+        photoUrl: body.photoUrl || null,
+      });
       res.status(201).json(staff);
     } catch {
       res.status(400).json({ error: 'Failed to create staff member' });
@@ -38,47 +87,77 @@ export const resourceController = {
   updateStaff: async (req: Request, res: Response) => {
     const id = routeId(req);
     if (!id) return res.status(400).json({ error: 'Invalid staff ID' });
+    const body = req.body ?? {};
+    const invalid = staffFieldsError(body, true);
+    if (invalid) return res.status(400).json({ error: invalid });
     try {
       const staff = await Staff.findByPk(id);
       if (!staff) return res.status(404).json({ error: 'Staff member not found' });
-      await staff.update(req.body);
+      // payType and monthlySalary, sent by the web app, are not stored by this API version.
+      await staff.update({
+        ...pick(body, ['name', 'phone', 'position', 'commissionRate', 'status']),
+        ...(body.photoUrl !== undefined && { photoUrl: body.photoUrl || null }),
+      });
       res.json(staff);
     } catch {
       res.status(400).json({ error: 'Failed to update staff member' });
     }
   },
 
+  // Never destroys sales, commissions or attendance: a member with history is archived (inactive,
+  // hidden from lists, kept in reports). Everything happens in one transaction.
   deleteStaff: async (req: Request, res: Response) => {
     const id = routeId(req);
-    if (!id) return res.status(400).json({ error: 'Invalid staff ID' });
+    if (!isUuid(id)) return res.status(400).json({ error: 'Invalid staff ID' });
+    try {
+      const outcome = await sequelize.transaction(async (transaction) => {
+        // Sales lock the staff row too, so nothing can be attributed to this member meanwhile.
+        const staff = await Staff.findByPk(id, { transaction, lock: transaction.LOCK.UPDATE });
+        if (!staff) return null;
+
+        // Team accounts linked to this member lose access (sessions revoked) but are kept for the audit trail.
+        const accounts = await User.findAll({ where: { staffId: id, role: { [Op.ne]: 'admin' } }, transaction, lock: transaction.LOCK.UPDATE });
+        for (const account of accounts) {
+          await account.update({ status: 'inactive', authVersion: account.authVersion + 1 }, { transaction });
+        }
+
+        // Evaluated one after the other on the transaction's connection.
+        const history = [
+          await Sale.count({ where: { staffId: id }, transaction }),
+          await Commission.count({ where: { staffId: id }, transaction }),
+          await Attendance.count({ where: { staffId: id }, transaction }),
+          await Appointment.count({ where: { staffId: id }, transaction }),
+        ];
+        if (history.every((count) => count === 0)) {
+          await staff.destroy({ transaction });
+          return 'deleted' as const;
+        }
+        await staff.update({ status: 'inactive', archivedAt: staff.archivedAt ?? new Date() }, { transaction });
+        return 'archived' as const;
+      });
+      if (!outcome) return res.status(404).json({ error: 'Staff member not found' });
+
+      res.json({
+        success: true,
+        outcome,
+        message: outcome === 'deleted' ? 'Staff member deleted (no history)' : 'Staff member archived; sales, commissions and attendance are kept',
+      });
+    } catch {
+      res.status(500).json({ error: 'Failed to delete staff member' });
+    }
+  },
+
+  restoreStaff: async (req: Request, res: Response) => {
+    const id = routeId(req);
+    if (!isUuid(id)) return res.status(400).json({ error: 'Invalid staff ID' });
     try {
       const staff = await Staff.findByPk(id);
       if (!staff) return res.status(404).json({ error: 'Staff member not found' });
-
-      const sales = await Sale.findAll({ where: { staffId: id } });
-      const saleIds = sales.map((sale) => sale.id);
-
-      if (saleIds.length > 0) {
-        const saleItems = await SaleItem.findAll({ where: { saleId: saleIds } });
-        const saleItemIds = saleItems.map((item) => item.id);
-
-        if (saleItemIds.length > 0) {
-          await Commission.destroy({ where: { saleItemId: saleItemIds } });
-        }
-
-        await SaleItem.destroy({ where: { saleId: saleIds } });
-      }
-
-      await Commission.destroy({ where: { staffId: id } });
-      await Attendance.destroy({ where: { staffId: id } });
-      await Sale.destroy({ where: { staffId: id } });
-      await Appointment.destroy({ where: { staffId: id } });
-      await User.destroy({ where: { staffId: id } });
-      await staff.destroy();
-
-      res.json({ success: true, message: 'Staff member deleted successfully' });
+      // Comes back inactive: the administrator reactivates the member explicitly.
+      if (staff.archivedAt) await staff.update({ archivedAt: null });
+      res.json(staff);
     } catch {
-      res.status(500).json({ error: 'Failed to delete staff member' });
+      res.status(500).json({ error: 'Failed to restore staff member' });
     }
   },
 
@@ -228,14 +307,11 @@ export const resourceController = {
   },
 
   createService: async (req: Request, res: Response) => {
-    const { name, description, price, duration, category } = req.body;
-    if (typeof name !== 'string' || typeof category !== 'string' ||
-        !Number.isFinite(Number(price)) || Number(price) < 0 ||
-        !Number.isInteger(Number(duration)) || Number(duration) <= 0) {
-      return res.status(400).json({ error: 'Name, category, a valid price and duration are required' });
-    }
+    const body = req.body ?? {};
+    const invalid = serviceFieldsError(body, false);
+    if (invalid) return res.status(400).json({ error: invalid });
     try {
-      const service = await Service.create({ name: name.trim(), description, price, duration, category: category.trim() });
+      const service = await Service.create(pick(body, ['name', 'description', 'price', 'duration', 'category']));
       res.status(201).json(service);
     } catch {
       res.status(400).json({ error: 'Failed to create service' });
@@ -245,10 +321,14 @@ export const resourceController = {
   updateService: async (req: Request, res: Response) => {
     const id = routeId(req);
     if (!id) return res.status(400).json({ error: 'Invalid service ID' });
+    const body = req.body ?? {};
+    const invalid = serviceFieldsError(body, true);
+    if (invalid) return res.status(400).json({ error: invalid });
     try {
       const service = await Service.findByPk(id);
       if (!service) return res.status(404).json({ error: 'Service not found' });
-      await service.update(req.body);
+      // audience, womenPrice and menPrice, sent by the web app, are not stored by this API version.
+      await service.update(pick(body, ['name', 'description', 'price', 'duration', 'category', 'status']));
       res.json(service);
     } catch {
       res.status(400).json({ error: 'Failed to update service' });

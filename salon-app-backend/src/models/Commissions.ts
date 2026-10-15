@@ -11,6 +11,7 @@ export class Commission extends Model {
   declare date: Date;
   declare paid: boolean;
   declare paymentDate?: Date;
+  declare paymentId: string | null;
 }
 
 Commission.init(
@@ -50,6 +51,11 @@ Commission.init(
     },
     paymentDate: {
       type: DataTypes.DATE,
+      allowNull: true,
+    },
+    // Settlement that paid this commission (commission_payments); its foreign key is added by migration 005.
+    paymentId: {
+      type: DataTypes.UUID,
       allowNull: true,
     },
   },

@@ -1,7 +1,9 @@
 import axios, { isAxiosError } from 'axios';
 import type { AxiosInstance, InternalAxiosRequestConfig } from 'axios';
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000/api';
+// VITE_API_URL is checked when the app is built (vite.config.ts, config/apiUrl.ts): the localhost
+// fallback only exists for the development server and is removed from production bundles.
+const API_BASE_URL = import.meta.env.VITE_API_URL?.trim() || (import.meta.env.DEV ? 'http://localhost:3000/api' : '');
 export const authTokenKey = 'authToken';
 
 class APIClient {
@@ -43,8 +45,8 @@ class APIClient {
     return this.client.get<T>(url, { params });
   }
 
-  post<T>(url: string, data?: unknown) {
-    return this.client.post<T>(url, data);
+  post<T>(url: string, data?: unknown, headers?: Record<string, string>) {
+    return this.client.post<T>(url, data, headers ? { headers } : undefined);
   }
 
   put<T>(url: string, data?: unknown) {
@@ -82,13 +84,33 @@ const knownErrors: Record<string, string> = {
   'Public registration is disabled': 'L’inscription est fermée : demandez un accès à l’administrateur.',
   'Role must be staff or cashier': 'Seuls les rôles Équipe et Caisse peuvent être attribués.',
   'Use your own settings to change the administrator password': 'Le mot de passe administrateur se change depuis son propre compte.',
+  'Phone number belongs to an archived client': 'Ce numéro appartient à un client archivé : l’administrateur peut restaurer sa fiche.',
+  'No unpaid commission is covered by this amount': 'Aucune commission à régler pour ce montant : le solde a peut-être déjà été payé.',
+  'Idempotency key already used for another payment': 'Ce paiement a déjà été traité.',
+  'This staff member is already linked to another account': 'Cette fiche est déjà reliée à un autre accès.',
+  'Staff member not found': 'Membre de l’équipe introuvable.',
+  'Active staff member not found': 'Membre de l’équipe introuvable ou inactif.',
+  'Active service not found': 'Prestation introuvable ou retirée.',
+  'Client not found': 'Client introuvable ou archivé.',
+  'Commission rate must be between 0 and 100': 'Le taux de commission doit être compris entre 0 et 100 %.',
 };
 
 export const getApiError = (error: unknown, fallback: string) => {
   if (!isAxiosError(error)) return fallback;
   if (!error.response) return 'Serveur injoignable. Vérifiez que l’API est démarrée.';
-  if (error.response.status === 403) return 'Action réservée à un administrateur.';
+  if (error.response.status === 403) return 'Action non autorisée pour votre rôle.';
+  if (error.response.status === 413) return 'Données trop volumineuses (photo trop lourde ?).';
   if (error.response.status === 429) return knownErrors['Too many login attempts'];
   const message = (error.response.data as { error?: string } | undefined)?.error;
   return (message && knownErrors[message]) || fallback;
+};
+
+// "online": API and database answer; "degraded": the API answers but not its database.
+export const checkApiStatus = async (): Promise<'online' | 'degraded' | 'offline'> => {
+  try {
+    await apiClient.get('/health/ready');
+    return 'online';
+  } catch (error) {
+    return isAxiosError(error) && error.response?.status === 503 ? 'degraded' : 'offline';
+  }
 };

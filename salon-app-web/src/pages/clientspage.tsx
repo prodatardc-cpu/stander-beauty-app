@@ -27,6 +27,7 @@ export const ClientsPage = () => {
   const [loyaltyCard, setLoyaltyCard] = useState<LoyaltyCard | null>(null);
   const [history, setHistory] = useState<{ client: Client; sales: Sale[] | null } | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
+  const [showArchived, setShowArchived] = useState(false);
 
   useEffect(() => {
     const timer = window.setTimeout(() => setDebouncedQuery(query.trim()), 250);
@@ -36,7 +37,7 @@ export const ClientsPage = () => {
   useEffect(() => {
     let active = true;
     apiClient
-      .get<Client[]>('/clients/search', { q: debouncedQuery })
+      .get<Client[]>('/clients/search', { q: debouncedQuery, ...(showArchived && { includeArchived: 'true' }) })
       .then(({ data }) => {
         if (active) { setClients(data); setError(''); }
       })
@@ -49,7 +50,7 @@ export const ClientsPage = () => {
     return () => {
       active = false;
     };
-  }, [debouncedQuery, reloadKey]);
+  }, [debouncedQuery, reloadKey, showArchived]);
 
   const setField = (key: keyof ClientForm, value: string) =>
     setEditor((current) => current && { ...current, form: { ...current.form, [key]: value } });
@@ -78,17 +79,27 @@ export const ClientsPage = () => {
   const handleDelete = async (client: Client) => {
     const accepted = await confirm({
       title: `Supprimer ${client.name} ?`,
-      message: 'Ses rendez-vous et l’historique de ses achats seront aussi supprimés. Cette action est irréversible.',
+      message: 'Si ce client a des achats ou des rendez-vous, sa fiche est archivée : ventes, commissions et rapports restent intacts, et elle peut être restaurée. Sinon, elle est supprimée.',
       confirmLabel: 'Supprimer',
       danger: true,
     });
     if (!accepted) return;
     try {
-      await apiClient.delete(`/clients/${client.id}`);
-      setClients((current) => current.filter((entry) => entry.id !== client.id));
-      notify(`${client.name} a été supprimé.`);
+      const { data } = await apiClient.delete<{ outcome: 'archived' | 'deleted' }>(`/clients/${client.id}`);
+      setReloadKey((key) => key + 1);
+      notify(data.outcome === 'archived' ? `${client.name} a été archivé : son historique est conservé.` : `${client.name} a été supprimé.`);
     } catch (requestError) {
       notify(getApiError(requestError, 'Impossible de supprimer ce client.'), 'error');
+    }
+  };
+
+  const restoreClient = async (client: Client) => {
+    try {
+      await apiClient.post(`/clients/${client.id}/restore`);
+      setReloadKey((key) => key + 1);
+      notify(`${client.name} est de nouveau dans le fichier client.`);
+    } catch (requestError) {
+      notify(getApiError(requestError, 'Impossible de restaurer ce client.'), 'error');
     }
   };
 
@@ -131,6 +142,10 @@ export const ClientsPage = () => {
           placeholder="Rechercher par nom ou téléphone…"
           className="search-input"
         />
+        {isAdmin && <label className="flex items-center gap-2 text-sm text-gray-600">
+          <input type="checkbox" checked={showArchived} onChange={(event) => setShowArchived(event.target.checked)} />
+          Afficher les clients archivés
+        </label>}
       </div>
 
       {error && <p role="alert" className="text-sm text-red-700">{error}</p>}
@@ -148,7 +163,7 @@ export const ClientsPage = () => {
                   <td>
                     <span className="flex items-center gap-3">
                       <Avatar name={client.name} size={36} />
-                      <span><span className="cell-title">{client.name}</span>{client.notes && <span className="cell-sub">{client.notes}</span>}</span>
+                      <span><span className="cell-title">{client.name}{client.archivedAt && <> <span className="badge">Archivé</span></>}</span>{client.notes && <span className="cell-sub">{client.notes}</span>}</span>
                     </span>
                   </td>
                   <td>{client.phone}</td>
@@ -157,9 +172,13 @@ export const ClientsPage = () => {
                   <td className="num">{formatCurrency(client.totalSpent || 0, currency)}</td>
                   <td className="actions"><span className="row-actions">
                     <button type="button" className="link-button" onClick={() => void showHistory(client)}>Historique</button>
-                    <button type="button" className="link-button" onClick={() => void showLoyaltyCard(client)}>Carte QR</button>
-                    <button type="button" className="link-button" onClick={() => setEditor({ id: client.id, form: { name: client.name, phone: client.phone, notes: client.notes ?? '' } })}>Modifier</button>
-                    {isAdmin && <button type="button" className="link-button is-danger" onClick={() => void handleDelete(client)}>Supprimer</button>}
+                    {client.archivedAt ? (
+                      isAdmin && <button type="button" className="link-button" onClick={() => void restoreClient(client)}>Restaurer</button>
+                    ) : <>
+                      <button type="button" className="link-button" onClick={() => void showLoyaltyCard(client)}>Carte QR</button>
+                      <button type="button" className="link-button" onClick={() => setEditor({ id: client.id, form: { name: client.name, phone: client.phone, notes: client.notes ?? '' } })}>Modifier</button>
+                      {isAdmin && <button type="button" className="link-button is-danger" onClick={() => void handleDelete(client)}>Supprimer</button>}
+                    </>}
                   </span></td>
                 </tr>
               ))}

@@ -61,25 +61,26 @@ export const StaffPage = () => {
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
   const [editor, setEditor] = useState<{ id: string | 'new'; form: StaffForm } | null>(null);
+  const [showArchived, setShowArchived] = useState(false);
 
   const loadStaff = useCallback(async () => {
     try {
-      const { data } = await apiClient.get<Staff[]>('/staff');
+      const { data } = await apiClient.get<Staff[]>('/staff', showArchived ? { includeArchived: 'true' } : undefined);
       setStaff(data);
       setError('');
     } catch (requestError) {
       setError(getApiError(requestError, 'Impossible de charger le personnel.'));
     }
-  }, []);
+  }, [showArchived]);
 
   useEffect(() => {
     let active = true;
-    apiClient.get<Staff[]>('/staff')
+    apiClient.get<Staff[]>('/staff', showArchived ? { includeArchived: 'true' } : undefined)
       .then(({ data }) => { if (active) setStaff(data); })
       .catch((requestError) => { if (active) setError(getApiError(requestError, 'Impossible de charger le personnel.')); })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
-  }, []);
+  }, [showArchived]);
 
   const setField = (key: keyof StaffForm, value: string) =>
     setEditor((current) => current && { ...current, form: { ...current.form, [key]: value } });
@@ -137,21 +138,31 @@ export const StaffPage = () => {
   const handleDelete = async (member: Staff) => {
     const accepted = await confirm({
       title: `Supprimer ${member.name} ?`,
-      message: 'Ses présences, commissions et rendez-vous seront supprimés. Ses ventes restent dans l’historique de caisse. Pour garder sa fiche, préférez « Désactiver ».',
-      confirmLabel: 'Supprimer définitivement',
+      message: 'S’il a des ventes, commissions, présences ou rendez-vous, il est archivé : tout cet historique reste intact et sa fiche peut être restaurée. Sinon, sa fiche est supprimée. Dans les deux cas, l’accès relié à sa fiche est bloqué.',
+      confirmLabel: 'Supprimer',
       danger: true,
     });
     if (!accepted) return;
     try {
-      await apiClient.delete(`/staff/${member.id}`);
-      notify(`${member.name} a été supprimé.`);
+      const { data } = await apiClient.delete<{ outcome: 'archived' | 'deleted' }>(`/staff/${member.id}`);
+      notify(data.outcome === 'archived' ? `${member.name} a été archivé : son historique est conservé.` : `${member.name} a été supprimé.`);
       await loadStaff();
     } catch (requestError) {
       notify(getApiError(requestError, 'Impossible de supprimer ce membre du personnel.'), 'error');
     }
   };
 
-  const activeCount = staff.filter((member) => member.status === 'active').length;
+  const restoreMember = async (member: Staff) => {
+    try {
+      await apiClient.post(`/staff/${member.id}/restore`);
+      notify(`${member.name} est restauré (inactif) : réactivez-le pour l’affecter en caisse.`);
+      await loadStaff();
+    } catch (requestError) {
+      notify(getApiError(requestError, 'Impossible de restaurer ce membre.'), 'error');
+    }
+  };
+
+  const activeCount = staff.filter((member) => member.status === 'active' && !member.archivedAt).length;
 
   return (
     <section className="space-y-6">
@@ -161,6 +172,10 @@ export const StaffPage = () => {
         subtitle={`${activeCount} membre(s) actif(s) sur ${staff.length}`}
         actions={isAdmin && <button type="button" className="btn btn-primary" onClick={() => setEditor({ id: 'new', form: emptyDraft })}>Ajouter un membre</button>}
       />
+      {isAdmin && <label className="flex items-center gap-2 text-sm text-gray-600">
+        <input type="checkbox" checked={showArchived} onChange={(event) => setShowArchived(event.target.checked)} />
+        Afficher les membres archivés
+      </label>}
       {error && <p role="alert" className="text-sm text-red-700">{error}</p>}
       <div className="overflow-x-auto">
         {loading ? <p className="loading-line">Chargement de l’équipe…</p> : staff.length ? (
@@ -176,11 +191,13 @@ export const StaffPage = () => {
                 </td>
                 <td>{member.phone}</td>
                 <td>{member.payType === 'fixed' ? `Salaire fixe · ${formatCurrency(member.monthlySalary, currency)} / mois` : `Commission · ${Number(member.commissionRate)} %`}</td>
-                <td><span className={`badge ${member.status === 'active' ? 'badge-success' : ''}`}>{member.status === 'active' ? 'Actif' : 'Inactif'}</span></td>
+                <td><span className={`badge ${member.status === 'active' ? 'badge-success' : ''}`}>{member.archivedAt ? 'Archivé' : member.status === 'active' ? 'Actif' : 'Inactif'}</span></td>
                 {isAdmin && <td className="actions"><span className="row-actions">
-                  <button type="button" className="link-button" onClick={() => setEditor({ id: member.id, form: toForm(member) })}>Modifier</button>
-                  <button type="button" className="link-button" onClick={() => void toggleStatus(member)}>{member.status === 'active' ? 'Désactiver' : 'Réactiver'}</button>
-                  <button type="button" className="link-button is-danger" onClick={() => void handleDelete(member)}>Supprimer</button>
+                  {member.archivedAt ? <button type="button" className="link-button" onClick={() => void restoreMember(member)}>Restaurer</button> : <>
+                    <button type="button" className="link-button" onClick={() => setEditor({ id: member.id, form: toForm(member) })}>Modifier</button>
+                    <button type="button" className="link-button" onClick={() => void toggleStatus(member)}>{member.status === 'active' ? 'Désactiver' : 'Réactiver'}</button>
+                    <button type="button" className="link-button is-danger" onClick={() => void handleDelete(member)}>Supprimer</button>
+                  </>}
                 </span></td>}
               </tr>
             ))}</tbody>

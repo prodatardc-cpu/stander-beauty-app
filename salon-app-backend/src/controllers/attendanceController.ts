@@ -2,6 +2,7 @@ import type { Request, Response } from 'express';
 import { sequelize } from '../config/database';
 import { Attendance, type AttendanceStatus } from '../models/Attendance';
 import { Staff } from '../models/Staff';
+import { isUuid } from '../utils/validators';
 
 const getWorkDate = (value: unknown): string | null => {
   if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
@@ -26,13 +27,13 @@ export const attendanceController = {
   saveForDate: async (req: Request, res: Response) => {
     const date = getWorkDate(req.params.date);
     if (!date) return res.status(400).json({ error: 'Choose a valid date from Monday to Saturday' });
-    if (!Array.isArray(req.body.entries)) return res.status(400).json({ error: 'Attendance entries are required' });
+    if (!Array.isArray(req.body?.entries) || req.body.entries.length > 500) return res.status(400).json({ error: 'Attendance entries are required' });
 
     const entries: { staffId: string; status: AttendanceStatus }[] = [];
     for (const entry of req.body.entries as unknown[]) {
       if (!entry || typeof entry !== 'object') return res.status(400).json({ error: 'Invalid attendance entry' });
       const row = entry as { staffId?: unknown; status?: unknown };
-      if (typeof row.staffId !== 'string' || !['present', 'absent'].includes(String(row.status))) {
+      if (!isUuid(row.staffId) || !['present', 'absent'].includes(String(row.status))) {
         return res.status(400).json({ error: 'Each team member must be marked present or absent' });
       }
       entries.push({ staffId: row.staffId, status: row.status as AttendanceStatus });
@@ -43,7 +44,8 @@ export const attendanceController = {
     }
 
     try {
-      const staff = await Staff.findAll({ attributes: ['id'] });
+      // Archived members are no longer part of the daily roll call.
+      const staff = await Staff.findAll({ where: { archivedAt: null }, attributes: ['id'] });
       if (staff.length !== entries.length || staff.some((member) => !entries.some((entry) => entry.staffId === member.id))) {
         return res.status(400).json({ error: 'Mark every current team member before saving' });
       }

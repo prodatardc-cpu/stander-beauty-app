@@ -1,4 +1,4 @@
-satimport type { Request, Response } from 'express';
+import type { Request, Response } from 'express';
 import { sequelize } from '../config/database';
 import { Commission, Sale, SaleItem, Staff, Service } from '../models';
 import { Client } from '../models/Client';
@@ -6,6 +6,9 @@ import { Product } from '../models/Product';
 import { commissionService } from '../services/commissionServices';
 import type { AuthRequest } from '../middleware/authMiddleware';
 import { InsufficientStockError, stockService } from '../services/stockService';
+import { isUuid } from '../utils/validators';
+
+const saleLimits = { items: 100, quantity: 1000, clientName: 120, exchangeRate: 1_000_000 };
 
 export const saleController = {
   create: async (req: Request, res: Response) => {
@@ -25,15 +28,17 @@ export const saleController = {
       if ((rawClientId != null && typeof rawClientId !== 'string') ||
           (rawClientName != null && typeof rawClientName !== 'string') ||
           (rawStaffId != null && typeof rawStaffId !== 'string') || (clientId && clientName) ||
-          !Array.isArray(items) || items.length === 0 || !paymentMethods.includes(paymentMethod) || !['USD', 'CDF'].includes(currency) || !['USD', 'CDF'].includes(baseCurrency) ||
-          (currency !== baseCurrency && (!Number.isFinite(exchangeRate) || exchangeRate <= 0))) {
+          (clientId && !isUuid(clientId)) || (staffId && !isUuid(staffId)) || clientName.length > saleLimits.clientName ||
+          !Array.isArray(items) || items.length === 0 || items.length > saleLimits.items ||
+          !paymentMethods.includes(paymentMethod) || !['USD', 'CDF'].includes(currency) || !['USD', 'CDF'].includes(baseCurrency) ||
+          (currency !== baseCurrency && (!Number.isFinite(exchangeRate) || exchangeRate <= 0 || exchangeRate > saleLimits.exchangeRate))) {
         return res.status(400).json({ error: 'Choose at most one client, and provide a payment method and sale items' });
       }
       if (items.some((item: unknown) => {
         if (!item || typeof item !== 'object') return true;
         const line = item as { type?: unknown; itemId?: unknown; quantity?: unknown };
-        return !['service', 'product'].includes(String(line.type)) || typeof line.itemId !== 'string' ||
-          !Number.isInteger(Number(line.quantity)) || Number(line.quantity) < 1;
+        return !['service', 'product'].includes(String(line.type)) || !isUuid(line.itemId) ||
+          !Number.isInteger(Number(line.quantity)) || Number(line.quantity) < 1 || Number(line.quantity) > saleLimits.quantity;
       })) {
         return res.status(400).json({ error: 'Each item needs a valid type, ID and positive quantity' });
       }
@@ -43,7 +48,9 @@ export const saleController = {
           clientId ? Client.findByPk(clientId, { transaction, lock: transaction.LOCK.UPDATE }) : Promise.resolve(null),
           staffId ? Staff.findByPk(staffId, { transaction, lock: transaction.LOCK.UPDATE }) : Promise.resolve(null),
         ]);
-        if ((clientId && !client) || (staffId && !staff) || (staff && staff.status !== 'active')) throw new Error('Client or active staff member not found');
+        if ((clientId && (!client || client.archivedAt)) || (staffId && !staff) || (staff && (staff.status !== 'active' || staff.archivedAt))) {
+          throw new Error('Client or active staff member not found');
+        }
 
         const productQuantities = new Map<string, number>();
         for (const rawItem of items) {
@@ -122,7 +129,10 @@ export const saleController = {
         'Selected item has an invalid price', 'Insufficient product stock',
         'Amount paid must be between zero and the total',
       ].includes(message);
-      res.status(clientError || error instanceof InsufficientStockError ? 400 : 500).json({ error: message });
+      if (clientError || error instanceof InsufficientStockError) return res.status(400).json({ error: message });
+      // Anything else is internal: log it, but do not send database details to the browser.
+      console.error('Sale creation failed:', error instanceof Error ? `${error.name}: ${error.message}` : 'unknown error');
+      res.status(500).json({ error: 'Failed to create sale' });
     }
   },
 

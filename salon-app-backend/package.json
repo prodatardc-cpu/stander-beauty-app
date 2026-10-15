@@ -8,7 +8,10 @@
     "dev": "node ./node_modules/nodemon/bin/nodemon.js --watch src --ext ts --exec \"node ./node_modules/ts-node/dist/bin.js\" src/server.ts",
     "build": "node ./node_modules/typescript/bin/tsc",
     "start": "node dist/server.js",
-    "typecheck": "node ./node_modules/typescript/bin/tsc --noEmit",
+    "typecheck": "node ./node_modules/typescript/bin/tsc --noEmit && node ./node_modules/typescript/bin/tsc -p tsconfig.test.json",
+    "test": "node --require ./test/register.js --test --test-concurrency=1 \"test/**/*.test.ts\"",
+    "db:migrate": "node dist/scripts/migrate.js",
+    "db:migrate:dev": "node ./node_modules/ts-node/dist/bin.js src/scripts/migrate.ts",
     "admin:reset-password": "node ./node_modules/ts-node/dist/bin.js src/scripts/resetAdminPassword.ts"
   },
   "dependencies": {
@@ -29,5 +32,8 @@
     "nodemon": "^3.1.14",
     "ts-node": "^10.9.2",
     "typescript": "^5.9.3"
+  },
+  "overrides": {
+    "uuid": "^11.1.1"
   }
 }

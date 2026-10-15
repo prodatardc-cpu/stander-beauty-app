@@ -6,6 +6,7 @@ import type { User } from '../types';
 import { setUser } from '../redux/slices/authSlice';
 import { apiClient, getApiError } from '../services/api';
 import { ThemeToggle } from '../components/Common/ThemeToggle';
+import { BrandMark } from '../components/Common/BrandMark';
 
 export const LoginPage = () => {
   const [email, setEmail] = useState('');
@@ -54,10 +55,10 @@ export const LoginPage = () => {
         <div className="auth-card">
           <div className="auth-brand-row">
             <Link to="/login" className="auth-wordmark" aria-label="Stander Beauty">
-              <img className="studio-monogram" src="/salon-mark.svg" alt="" />
+              <BrandMark className="studio-monogram" />
               <span className="auth-brand-copy">
                 <strong>Stander Beauty</strong>
-                <small>Bunglon Cript</small>
+                <small>Votre beauté, notre signature</small>
               </span>
             </Link>
             <ThemeToggle />
