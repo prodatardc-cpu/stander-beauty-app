@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState, type ChangeEvent, type FormEvent } from 'react';
+import { Link } from 'react-router-dom';
 import type { Staff } from '../types';
 import { apiClient, getApiError } from '../services/api';
 import { formatCurrency, useCurrency } from '../services/currency';
@@ -6,6 +7,7 @@ import { useIsAdmin } from '../hooks/useAuth';
 import { useFeedback } from '../components/UI/Feedback';
 import { Modal } from '../components/UI/Modal';
 import { Avatar, EmptyState, PageHeader } from '../components/UI/PageHeader';
+import { compressPhoto } from '../utils/image';
 
 const emptyDraft = {
   name: '', phone: '', position: '', positionCategory: 'Autre', payType: 'commission' as Staff['payType'],
@@ -21,35 +23,6 @@ const toForm = (member: Staff): StaffForm => ({
   payType: member.payType,
   commissionRate: String(Number(member.commissionRate)), monthlySalary: String(Number(member.monthlySalary || 0)),
   photoUrl: member.photoUrl ?? '',
-});
-
-// The API accepts JPEG data URLs up to ~90 KB, so photos are cropped, resized and recompressed in the browser.
-const compressPhoto = (file: File) => new Promise<string>((resolve, reject) => {
-  const image = new Image();
-  const url = URL.createObjectURL(file);
-  image.onload = () => {
-    URL.revokeObjectURL(url);
-    const size = 256;
-    const canvas = document.createElement('canvas');
-    canvas.width = size;
-    canvas.height = size;
-    const context = canvas.getContext('2d');
-    if (!context) return reject(new Error('Canvas unavailable'));
-    const side = Math.min(image.width, image.height);
-    context.drawImage(image, (image.width - side) / 2, (image.height - side) / 2, side, side, 0, 0, size, size);
-    let quality = 0.85;
-    let result = canvas.toDataURL('image/jpeg', quality);
-    while (result.length > 88000 && quality > 0.3) {
-      quality -= 0.1;
-      result = canvas.toDataURL('image/jpeg', quality);
-    }
-    resolve(result);
-  };
-  image.onerror = () => {
-    URL.revokeObjectURL(url);
-    reject(new Error('Invalid image'));
-  };
-  image.src = url;
 });
 
 export const StaffPage = () => {
@@ -90,7 +63,7 @@ export const StaffPage = () => {
     event.target.value = '';
     if (!file) return;
     try {
-      setField('photoUrl', await compressPhoto(file));
+      setField('photoUrl', await compressPhoto(file, { width: 256, height: 256 }));
     } catch {
       notify('Cette image ne peut pas être utilisée.', 'error');
     }
@@ -186,13 +159,14 @@ export const StaffPage = () => {
                 <td>
                   <span className="flex items-center gap-3">
                     <Avatar name={member.name} photoUrl={member.photoUrl} />
-                    <span><span className="cell-title">{member.name}</span><span className="cell-sub">{member.position}</span></span>
+                    <span><Link to={`/staff/${member.id}`} className="cell-title link-button">{member.name}</Link><span className="cell-sub">{member.position}</span></span>
                   </span>
                 </td>
                 <td>{member.phone}</td>
                 <td>{member.payType === 'fixed' ? `Salaire fixe · ${formatCurrency(member.monthlySalary, currency)} / mois` : `Commission · ${Number(member.commissionRate)} %`}</td>
                 <td><span className={`badge ${member.status === 'active' ? 'badge-success' : ''}`}>{member.archivedAt ? 'Archivé' : member.status === 'active' ? 'Actif' : 'Inactif'}</span></td>
                 {isAdmin && <td className="actions"><span className="row-actions">
+                  <Link to={`/staff/${member.id}`} className="link-button">Fiche</Link>
                   {member.archivedAt ? <button type="button" className="link-button" onClick={() => void restoreMember(member)}>Restaurer</button> : <>
                     <button type="button" className="link-button" onClick={() => setEditor({ id: member.id, form: toForm(member) })}>Modifier</button>
                     <button type="button" className="link-button" onClick={() => void toggleStatus(member)}>{member.status === 'active' ? 'Désactiver' : 'Réactiver'}</button>

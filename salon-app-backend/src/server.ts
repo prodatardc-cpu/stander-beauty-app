@@ -1,5 +1,5 @@
 import { createApp } from './app';
-import { connectDB } from './config/database';
+import { connectDB, describeDatabaseError } from './config/database';
 import { checkConfiguration, isProduction } from './config/env';
 import { ensureAdminAccount } from './controllers/authController';
 import { assertMigrationsApplied, runMigrations } from './db/migrator';
@@ -21,7 +21,7 @@ const startServer = async () => {
       console.log(`✅ Server running on http://localhost:${PORT}`);
     });
   } catch (error) {
-    console.error('❌ Server startup failed:', error instanceof Error ? `${error.name}: ${error.message}` : error);
+    console.error('❌ Server startup failed:', describeDatabaseError(error));
     process.exit(1);
   }
 };

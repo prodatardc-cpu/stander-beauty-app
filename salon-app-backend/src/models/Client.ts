@@ -39,7 +39,7 @@ Client.init(
       defaultValue: DataTypes.NOW,
     },
     totalSpent: {
-      type: DataTypes.DECIMAL(10, 2),
+      type: DataTypes.DECIMAL(14, 2),
       defaultValue: 0,
     },
     lastVisit: {

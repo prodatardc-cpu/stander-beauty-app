@@ -1,133 +1,92 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { isAxiosError } from 'axios';
-import type { Commission, Staff } from '../types';
+import { useCallback, useEffect, useState } from 'react';
+import { Link, Navigate } from 'react-router-dom';
+import type { StaffPay } from '../types';
 import { apiClient, getApiError } from '../services/api';
-import { formatCurrency, useCurrency } from '../services/currency';
-import { formatDate } from '../utils/format';
-import { useCan, useCurrentUser, useIsAdmin } from '../hooks/useAuth';
-import { useFeedback } from '../components/UI/Feedback';
-import { EmptyState, PageHeader, StatCard } from '../components/UI/PageHeader';
+import { formatCurrency, useCurrency, type Currency } from '../services/currency';
+import { periodLabel } from '../utils/format';
+import { useCan, useCurrentUser } from '../hooks/useAuth';
+import { MoneyByCurrency } from '../components/UI/Money';
+import { Avatar, EmptyState, PageHeader } from '../components/UI/PageHeader';
+import { PayDialog } from '../components/Team/PayDialog';
 
-type CommissionTotals = { total: number; paid: number; remaining: number };
-type PaymentIntent = { key: string; staffId: string; amount: number };
+const currencies: Currency[] = ['USD', 'CDF'];
+const pick = (member: StaffPay, read: (amounts: StaffPay['byCurrency'][Currency]) => number) =>
+  Object.fromEntries(currencies.map((currency) => [currency, read(member.byCurrency[currency])])) as Record<Currency, number>;
 
+// Team remuneration: what each member earned this period, was advanced, was paid and is still owed.
 export const CommissionsPage = () => {
-  const currency = useCurrency();
-  const isAdmin = useIsAdmin();
   const canReadAll = useCan('readAnyStaffFinancials');
+  const canPay = useCan('payCommissions');
   const ownStaffId = useCurrentUser()?.staffId ?? null;
-  const { notify, confirm } = useFeedback();
-  const [staff, setStaff] = useState<Staff[]>([]);
-  const [staffId, setStaffId] = useState('');
-  const [commissions, setCommissions] = useState<Commission[]>([]);
-  const [totals, setTotals] = useState<CommissionTotals | null>(null);
+  const baseCurrency = useCurrency();
+  const [team, setTeam] = useState<StaffPay[]>([]);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [saving, setSaving] = useState(false);
-  // Kept when a payment gets no answer (network failure), so that retrying it reuses the same
-  // idempotency key and cannot pay twice.
-  const pendingPayment = useRef<PaymentIntent | null>(null);
+  const [showArchived, setShowArchived] = useState(false);
+  const [paying, setPaying] = useState<StaffPay | null>(null);
 
-  useEffect(() => {
-    apiClient.get<Staff[]>('/staff').then(({ data }) => {
-      // Members are paid by commission unless a fixed salary is set explicitly.
-      const visible = canReadAll
-        ? data.filter((member) => member.payType !== 'fixed')
-        : data.filter((member) => member.id === ownStaffId);
-      setStaff(visible);
-      if (visible[0]) setStaffId(visible[0].id);
-    }).catch((requestError) => setError(getApiError(requestError, 'Impossible de charger le personnel.')));
-  }, [canReadAll, ownStaffId]);
-
-  const loadCommissions = useCallback(async (id: string) => {
-    const [list, summary] = await Promise.all([
-      apiClient.get<Commission[]>(`/commissions/staff/${id}`),
-      apiClient.get<CommissionTotals>(`/commissions/staff/${id}/total`),
-    ]);
-    return { list: list.data, summary: summary.data };
-  }, []);
-
-  useEffect(() => {
-    if (!staffId) return;
-    let active = true;
-    loadCommissions(staffId).then(({ list, summary }) => {
-      if (active) { setCommissions(list); setTotals(summary); setError(''); }
-    }).catch((requestError) => { if (active) setError(getApiError(requestError, 'Impossible de charger les commissions.')); });
-    return () => { active = false; };
-  }, [staffId, loadCommissions]);
-
-  const selected = staff.find((member) => member.id === staffId);
-
-  const refresh = async (id: string) => {
-    const { list, summary } = await loadCommissions(id);
-    setCommissions(list);
-    setTotals(summary);
-  };
-
-  const payOutstanding = async () => {
-    if (!staffId || !totals?.remaining || !selected) return;
-    const amount = totals.remaining;
-    const accepted = await confirm({
-      title: 'Régler les commissions ?',
-      message: `Marquer ${formatCurrency(amount, currency)} comme payés à ${selected.name}.`,
-      confirmLabel: 'Confirmer le paiement',
-    });
-    if (!accepted) return;
-    const previous = pendingPayment.current;
-    const intent = previous && previous.staffId === staffId && previous.amount === amount
-      ? previous
-      : { key: crypto.randomUUID(), staffId, amount };
-    pendingPayment.current = intent;
-    setSaving(true);
+  const fetchTeam = useCallback(async () => (await apiClient.get<StaffPay[]>('/payroll')).data, []);
+  const reload = useCallback(async () => {
     try {
-      await apiClient.post('/commissions/pay', { staffId, amount }, { 'Idempotency-Key': intent.key });
-      pendingPayment.current = null;
-      notify(`Commissions de ${selected.name} réglées.`);
+      setTeam(await fetchTeam());
+      setError('');
     } catch (requestError) {
-      if (!isAxiosError(requestError) || requestError.response) pendingPayment.current = null;
-      notify(getApiError(requestError, 'Impossible d’enregistrer le paiement.'), 'error');
-    } finally {
-      setSaving(false);
-      await refresh(staffId).catch(() => undefined);
+      setError(getApiError(requestError, 'Impossible de charger les rémunérations.'));
     }
-  };
+  }, [fetchTeam]);
 
-  if (!canReadAll && !ownStaffId) {
+  useEffect(() => {
+    if (!canReadAll) return;
+    let active = true;
+    fetchTeam()
+      .then((data) => { if (active) { setTeam(data); setError(''); } })
+      .catch((requestError) => { if (active) setError(getApiError(requestError, 'Impossible de charger les rémunérations.')); })
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, [canReadAll, fetchTeam]);
+
+  // A team or till account sees its own page.
+  if (!canReadAll) {
+    if (ownStaffId) return <Navigate to={`/staff/${ownStaffId}`} replace />;
     return <section className="space-y-6">
-      <PageHeader eyebrow="Rémunérations" title="Commissions" subtitle="Calculées automatiquement sur les prestations encaissées." />
-      <EmptyState title="Votre accès n’est relié à aucune fiche de l’équipe." hint="L’administrateur peut le relier depuis Paramètres : vous verrez alors vos propres commissions." />
+      <PageHeader eyebrow="Équipe" title="Rémunérations" />
+      <EmptyState title="Votre accès n’est relié à aucune fiche de l’équipe." hint="L’administrateur peut le relier depuis Paramètres : vous verrez alors vos prestations et votre rémunération." />
     </section>;
   }
 
-  return <section className="space-y-6">
-    <PageHeader
-      eyebrow="Rémunérations"
-      title="Commissions"
-      subtitle={canReadAll ? 'Calculées automatiquement sur les prestations encaissées.' : 'Vos commissions, calculées sur les prestations encaissées.'}
-      actions={canReadAll && <label className="field min-w-56">Membre de l’équipe
-        <select value={staffId} onChange={(event) => setStaffId(event.target.value)}>
-          {!staff.length && <option value="">Aucun membre à la commission</option>}
-          {staff.map((entry) => <option key={entry.id} value={entry.id}>{entry.name} · {Number(entry.commissionRate)} %</option>)}
-        </select>
-      </label>}
-    />
-    {error && <p role="alert" className="text-sm text-red-700">{error}</p>}
-    {totals && <div className="kpi-grid">
-      <StatCard label="Commissions générées" value={formatCurrency(totals.total, currency)} />
-      <StatCard label="Déjà payées" value={formatCurrency(totals.paid, currency)} tone="positive" />
-      <StatCard label="Reste à payer" value={formatCurrency(totals.remaining, currency)} tone={totals.remaining > 0 ? 'warning' : undefined} />
-    </div>}
-    {isAdmin && <div className="flex justify-end"><button type="button" className="btn btn-primary" disabled={!totals?.remaining || saving} onClick={() => void payOutstanding()}>{saving ? 'Enregistrement…' : 'Régler le solde'}</button></div>}
-    <div className="overflow-x-auto">
-      {commissions.length ? <table className="data-table">
-        <thead><tr><th>Date</th><th className="num">Prestation</th><th className="num">Commission</th><th className="num">Part salon</th><th>État</th></tr></thead>
-        <tbody>{commissions.map((entry) => <tr key={entry.id}>
-          <td>{formatDate(entry.date)}</td>
-          <td className="num">{formatCurrency(entry.servicePrice, currency)}</td>
-          <td className="num">{formatCurrency(entry.commissionAmount, currency)}</td>
-          <td className="num">{formatCurrency(entry.patronneAmount, currency)}</td>
-          <td><span className={`badge ${entry.paid ? 'badge-success' : 'badge-warning'}`}>{entry.paid ? 'Payée' : 'À payer'}</span></td>
-        </tr>)}</tbody>
-      </table> : <EmptyState title={staff.length ? 'Aucune commission pour ce membre.' : 'Aucun membre rémunéré à la commission.'} hint={staff.length ? 'Les commissions apparaissent quand une prestation lui est attribuée en caisse.' : undefined} />}
-    </div>
-  </section>;
+  const visible = team.filter((member) => showArchived || !member.archivedAt);
+  const totalDue = Object.fromEntries(currencies.map((currency) => [currency, visible.reduce((sum, member) => sum + Math.max(0, member.byCurrency[currency].remaining), 0)])) as Record<Currency, number>;
+
+  return (
+    <section className="space-y-5">
+      <PageHeader
+        eyebrow="Équipe"
+        title="Rémunérations"
+        subtitle={<>Commissions et salaires par membre, dans la devise de chaque prestation. Reste à payer : {currencies.map((currency) => formatCurrency(totalDue[currency], currency)).join(' · ')}.</>}
+      />
+      <label className="flex items-center gap-2 text-sm text-gray-600"><input type="checkbox" checked={showArchived} onChange={(event) => setShowArchived(event.target.checked)} />Afficher les membres archivés</label>
+      {error && <p role="alert" className="text-sm text-red-700">{error}</p>}
+      <div className="overflow-x-auto">
+        {loading ? <p className="loading-line">Chargement…</p> : visible.length ? (
+          <table className="data-table compact-table">
+            <thead><tr><th>Membre</th><th>Rémunération</th><th className="num">Prestations (période)</th><th className="num">Acquis (période)</th><th className="num">Avances</th><th className="num">Payé</th><th className="num">Reste à payer</th><th className="actions">Actions</th></tr></thead>
+            <tbody>{visible.map((member) => <tr key={member.staffId}>
+              <td><span className="flex items-center gap-3"><Avatar name={member.name} photoUrl={member.photoUrl} size={32} /><span><Link to={`/staff/${member.staffId}`} className="cell-title link-button">{member.name}</Link><span className="cell-sub">{periodLabel(member)}</span></span></span></td>
+              <td>{member.payType === 'fixed' ? `Salaire fixe · ${formatCurrency(member.monthlySalary, baseCurrency)}` : `Commission · ${member.commissionRate} %`}</td>
+              <td className="num"><MoneyByCurrency values={pick(member, (amounts) => amounts.period.eligibleRevenue)} /></td>
+              <td className="num"><MoneyByCurrency values={pick(member, (amounts) => amounts.period.earned)} /></td>
+              <td className="num"><MoneyByCurrency values={pick(member, (amounts) => amounts.period.advances)} tone="expense" /></td>
+              <td className="num"><MoneyByCurrency values={pick(member, (amounts) => amounts.period.payments)} /></td>
+              <td className="num"><MoneyByCurrency values={pick(member, (amounts) => amounts.remaining)} tone={currencies.some((currency) => member.byCurrency[currency].remaining > 0) ? 'expense' : 'profit'} /></td>
+              <td className="actions"><span className="row-actions">
+                <Link to={`/staff/${member.staffId}`} className="link-button">Fiche</Link>
+                {canPay && !member.archivedAt && <button type="button" className="link-button" onClick={() => setPaying(member)}>Payer</button>}
+              </span></td>
+            </tr>)}</tbody>
+          </table>
+        ) : <EmptyState title="Aucun membre dans l’équipe." />}
+      </div>
+      {paying && <PayDialog pay={paying} onClose={() => setPaying(null)} onDone={() => { setPaying(null); void reload(); }} />}
+    </section>
+  );
 };

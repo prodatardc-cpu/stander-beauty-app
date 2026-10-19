@@ -1,4 +1,6 @@
 import type { Request, Response } from 'express';
+import { Op } from 'sequelize';
+import { settingsService } from '../services/settingsService';
 import { Appointment, type AppointmentStatus } from '../models/Appointment';
 import { Client } from '../models/Client';
 import { Service } from '../models/Service';
@@ -9,6 +11,34 @@ const statuses: AppointmentStatus[] = ['scheduled', 'confirmed', 'completed', 'c
 const maxNotesLength = 1000;
 
 const isDate = (value: unknown): value is string => typeof value === 'string' && value.length <= 40 && !Number.isNaN(Date.parse(value));
+const activeStatuses: AppointmentStatus[] = ['scheduled', 'confirmed'];
+
+// Another planned appointment of the same member overlapping [start, start + duration).
+const findConflict = async (staffId: string, start: Date, durationMinutes: number, excludeId?: string) => {
+  const end = new Date(start.getTime() + durationMinutes * 60_000);
+  const candidates = await Appointment.findAll({
+    where: {
+      staffId,
+      status: activeStatuses,
+      scheduledAt: { [Op.lt]: end, [Op.gt]: new Date(start.getTime() - 24 * 60 * 60_000) },
+      ...(excludeId && { id: { [Op.ne]: excludeId } }),
+    },
+    include: [{ model: Service, attributes: ['duration', 'name'] }, { model: Client, attributes: ['name'] }],
+  });
+  return candidates.find((entry) => {
+    const otherDuration = Number((entry.get('Service') as Service | undefined)?.duration ?? 30);
+    return new Date(entry.scheduledAt.getTime() + otherDuration * 60_000) > start;
+  }) ?? null;
+};
+
+const conflictResponse = (res: Response, conflict: Appointment) => res.status(409).json({
+  error: 'Staff member already booked at this time',
+  conflict: {
+    id: conflict.id, scheduledAt: conflict.scheduledAt,
+    service: (conflict.get('Service') as Service | undefined)?.name ?? null,
+    client: (conflict.get('Client') as Client | undefined)?.name ?? null,
+  },
+});
 
 // The client must not be archived, the staff member must be active and the service offered.
 const referencesError = async ({ clientId, staffId, serviceId }: { clientId?: string; staffId?: string; serviceId?: string }) => {
@@ -34,7 +64,7 @@ export const appointmentController = {
         include: [
           { model: Client, attributes: ['id', 'name', 'phone'] },
           { model: Staff, attributes: ['id', 'name'] },
-          { model: Service, attributes: ['id', 'name', 'duration', 'price'] },
+          { model: Service, attributes: ['id', 'name', 'duration', 'price', 'audience', 'womenPrice', 'menPrice'] },
         ],
         order: [['scheduledAt', 'ASC']],
       });
@@ -45,19 +75,29 @@ export const appointmentController = {
   },
 
   create: async (req: Request, res: Response) => {
-    const { clientId, staffId, serviceId, scheduledAt, notes } = req.body ?? {};
-    if (![clientId, staffId, serviceId].every(isUuid) || !isDate(scheduledAt) || !isOptionalText(notes, maxNotesLength)) {
+    const { clientId, staffId, serviceId, scheduledAt, notes, allowOverlap } = req.body ?? {};
+    if (![clientId, staffId, serviceId].every(isUuid) || !isDate(scheduledAt) || !isOptionalText(notes, maxNotesLength) ||
+        (allowOverlap !== undefined && typeof allowOverlap !== 'boolean')) {
       return res.status(400).json({ error: 'Client, staff, service and a valid date are required' });
     }
     try {
       const invalidReference = await referencesError({ clientId, staffId, serviceId });
       if (invalidReference) return res.status(400).json({ error: invalidReference });
+      const service = (await Service.findByPk(serviceId))!;
+      if (!allowOverlap) {
+        const conflict = await findConflict(staffId, new Date(scheduledAt), Number(service.duration));
+        if (conflict) return conflictResponse(res, conflict);
+      }
+      // The price is kept as booked: a later change of the service's price does not alter it.
+      const { baseCurrency } = await settingsService.get();
       const appointment = await Appointment.create({
         clientId,
         staffId,
         serviceId,
         scheduledAt: new Date(scheduledAt),
         notes: typeof notes === 'string' ? notes : undefined,
+        price: service.price,
+        currency: baseCurrency,
       });
       res.status(201).json(appointment);
     } catch {
@@ -69,8 +109,8 @@ export const appointmentController = {
   update: async (req: Request, res: Response) => {
     const id = req.params.id;
     if (!isUuid(id)) return res.status(400).json({ error: 'Invalid appointment ID' });
-    const { status, scheduledAt, notes, staffId, serviceId } = req.body ?? {};
-    const allowed = ['status', 'scheduledAt', 'notes', 'staffId', 'serviceId'];
+    const { status, scheduledAt, notes, staffId, serviceId, allowOverlap } = req.body ?? {};
+    const allowed = ['status', 'scheduledAt', 'notes', 'staffId', 'serviceId', 'allowOverlap'];
     if (Object.keys(req.body ?? {}).some((field) => !allowed.includes(field)) ||
         (status !== undefined && !statuses.includes(status)) ||
         (scheduledAt !== undefined && !isDate(scheduledAt)) ||
@@ -84,7 +124,19 @@ export const appointmentController = {
       if (!appointment) return res.status(404).json({ error: 'Appointment not found' });
       const invalidReference = await referencesError({ staffId, serviceId });
       if (invalidReference) return res.status(400).json({ error: invalidReference });
+      const service = (await Service.findByPk(serviceId ?? appointment.serviceId))!;
+      const nextStatus = status ?? appointment.status;
+      if (!allowOverlap && activeStatuses.includes(nextStatus) && (scheduledAt !== undefined || staffId !== undefined || serviceId !== undefined)) {
+        const conflict = await findConflict(staffId ?? appointment.staffId, scheduledAt !== undefined ? new Date(scheduledAt) : appointment.scheduledAt,
+          Number(service.duration), appointment.id);
+        if (conflict) return conflictResponse(res, conflict);
+      }
+      // Choosing another service takes its current price; otherwise the booked price stays.
+      const priceChange = serviceId !== undefined && serviceId !== appointment.serviceId
+        ? { price: service.price, currency: (await settingsService.get()).baseCurrency }
+        : {};
       await appointment.update({
+        ...priceChange,
         ...(status !== undefined && { status }),
         ...(scheduledAt !== undefined && { scheduledAt: new Date(scheduledAt) }),
         ...(notes !== undefined && { notes }),

@@ -51,7 +51,14 @@ describe('input validation', () => {
     assert.equal((await book({ clientId: archivedClient.id })).status, 400);
     assert.equal((await book({ staffId: inactiveMember.id })).status, 400);
     assert.equal((await book({ notes: 'x'.repeat(1001) })).status, 400);
-    assert.equal((await book({})).status, 201);
+    // Same member, same time as the confirmed appointment above: reported, then booked on confirmation.
+    const overlapping = await book({});
+    assert.equal(overlapping.status, 409);
+    assert.equal(overlapping.body.conflict.id, appointment.id);
+    const booked = await book({ allowOverlap: true });
+    assert.equal(booked.status, 201);
+    assert.deepEqual([Number(booked.body.price), booked.body.currency], [Number(service.price), 'USD'], 'price kept as booked');
+    assert.equal((await book({ scheduledAt: new Date(Date.now() + 2 * 60 * 60_000).toISOString() })).status, 201, 'free slot');
   });
 
   test('staff and services reject out-of-range values and unknown fields', async () => {

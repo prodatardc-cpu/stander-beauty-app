@@ -3,9 +3,12 @@
   "version": "1.0.0",
   "private": true,
   "type": "commonjs",
+  "engines": {
+    "node": ">=20.19"
+  },
   "main": "dist/server.js",
   "scripts": {
-    "dev": "node ./node_modules/nodemon/bin/nodemon.js --watch src --ext ts --exec \"node ./node_modules/ts-node/dist/bin.js\" src/server.ts",
+    "dev": "node --watch --require ts-node/register src/server.ts",
     "build": "node ./node_modules/typescript/bin/tsc",
     "start": "node dist/server.js",
     "typecheck": "node ./node_modules/typescript/bin/tsc --noEmit && node ./node_modules/typescript/bin/tsc -p tsconfig.test.json",
@@ -28,8 +31,7 @@
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
     "@types/jsonwebtoken": "^9.0.10",
-    "@types/node": "^26.6.3",
-    "nodemon": "^3.1.14",
+    "@types/node": "^24.13.3",
     "ts-node": "^10.9.2",
     "typescript": "^5.9.3"
   },

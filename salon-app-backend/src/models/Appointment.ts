@@ -11,6 +11,9 @@ export class Appointment extends Model {
   declare scheduledAt: Date;
   declare status: AppointmentStatus;
   declare notes?: string;
+  // Price of the service when it was booked: later catalogue changes do not alter it.
+  declare price: number | string | null;
+  declare currency: string | null;
 }
 
 Appointment.init(
@@ -29,6 +32,8 @@ Appointment.init(
       defaultValue: 'scheduled',
     },
     notes: { type: DataTypes.TEXT, allowNull: true },
+    price: { type: DataTypes.DECIMAL(10, 2), allowNull: true },
+    currency: { type: DataTypes.STRING(3), allowNull: true },
   },
   {
     sequelize,

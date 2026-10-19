@@ -64,7 +64,8 @@ export const checkConfiguration = (env: Environment = process.env) => {
   if (production && (secret.length < 32 || placeholderSecrets.has(secret))) {
     throw new Error('JWT_SECRET must be a random value of at least 32 characters in production (e.g. `openssl rand -hex 32`).');
   }
-  if (production && (!env.DB_PASSWORD || placeholderSecrets.has(env.DB_PASSWORD))) {
+  if (!env.DB_PASSWORD) throw new Error('DB_PASSWORD is missing from the backend environment (see .env.example).');
+  if (production && placeholderSecrets.has(env.DB_PASSWORD)) {
     throw new Error('DB_PASSWORD still has its placeholder value.');
   }
   try {

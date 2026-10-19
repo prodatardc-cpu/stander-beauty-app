@@ -1,16 +1,20 @@
 import type { ReactNode } from 'react';
 import { initials } from '../../utils/format';
+import { BackButton } from './BackButton';
 
 interface PageHeaderProps {
   eyebrow?: string;
   title: string;
   subtitle?: ReactNode;
   actions?: ReactNode;
+  // Secondary pages: a back arrow to the previous screen (or to `back` when opened directly).
+  back?: string;
 }
 
-export const PageHeader = ({ eyebrow, title, subtitle, actions }: PageHeaderProps) => (
+export const PageHeader = ({ eyebrow, title, subtitle, actions, back }: PageHeaderProps) => (
   <header className="page-header">
     <div>
+      {back && <BackButton fallback={back} />}
       {eyebrow && <p className="page-eyebrow">{eyebrow}</p>}
       <h1>{title}</h1>
       {subtitle && <p className="page-subtitle">{subtitle}</p>}
@@ -26,7 +30,8 @@ export const EmptyState = ({ title, hint }: { title: string; hint?: string }) =>
   </div>
 );
 
-export const StatCard = ({ label, value, hint, tone }: { label: string; value: ReactNode; hint?: ReactNode; tone?: 'positive' | 'negative' | 'warning' }) => (
+// Tones: positive/profit (green), warning/expense (amber), negative/danger (red).
+export const StatCard = ({ label, value, hint, tone }: { label: string; value: ReactNode; hint?: ReactNode; tone?: 'positive' | 'negative' | 'warning' | 'profit' | 'expense' | 'danger' }) => (
   <article className={`kpi-card${tone ? ` kpi-${tone}` : ''}`}>
     <p className="kpi-label">{label}</p>
     <p className="kpi-value">{value}</p>

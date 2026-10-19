@@ -16,27 +16,38 @@ const textLimits = { name: 120, phone: 40, position: 120, category: 80, descript
 const isPhoto = (value: unknown) =>
   typeof value === 'string' && value.startsWith('data:image/jpeg;base64,') && value.length <= 90000;
 
+// A product picture: a web address, or a photo compressed by the web app (same limit as staff photos).
+const isProductImage = (value: unknown) => typeof value === 'string' &&
+  (isPhoto(value) || (value.length <= 2000 && /^https?:\/\/\S+$/i.test(value.trim())));
+
 const isRate = (value: unknown) => typeof value !== 'boolean' && value !== null && value !== '' &&
   Number.isFinite(Number(value)) && Number(value) >= 0 && Number(value) <= 100;
 
+// A non-negative amount that fits the column (DECIMAL(10, 2) for prices, (12, 2) for salaries).
+const isAmount = (value: unknown, max = 99_999_999) => typeof value !== 'boolean' && value !== null && value !== '' &&
+  Number.isFinite(Number(value)) && Number(value) >= 0 && Number(value) <= max;
+const isOptionalAmount = (value: unknown) => value === undefined || value === null || isAmount(value);
+
 // Validates the fields of a staff member; `partial` for an update. Returns an error message or null.
 const staffFieldsError = (body: Record<string, unknown>, partial: boolean) => {
-  const allowed = ['name', 'phone', 'position', 'commissionRate', 'photoUrl', 'status'];
-  if (partial && Object.keys(body).some((field) => !allowed.includes(field) && !['payType', 'monthlySalary'].includes(field))) {
+  const allowed = ['name', 'phone', 'position', 'commissionRate', 'payType', 'monthlySalary', 'photoUrl', 'status'];
+  if (partial && Object.keys(body).some((field) => !allowed.includes(field))) {
     return 'Unknown staff fields';
   }
   for (const field of ['name', 'phone', 'position'] as const) {
     if ((!partial || body[field] !== undefined) && !isText(body[field], textLimits[field])) return 'Name, phone and position are required';
   }
   if (body.commissionRate !== undefined && !isRate(body.commissionRate)) return 'Commission rate must be between 0 and 100';
+  if (body.payType !== undefined && !['commission', 'fixed'].includes(String(body.payType))) return 'Pay type must be commission or fixed';
+  if (body.monthlySalary !== undefined && !isAmount(body.monthlySalary, 9_999_999_999)) return 'Monthly salary must be a positive amount';
   if (body.photoUrl != null && body.photoUrl !== '' && !isPhoto(body.photoUrl)) return 'Photo must be a compressed JPEG smaller than 90 KB';
   if (body.status !== undefined && !['active', 'inactive'].includes(String(body.status))) return 'Invalid status';
   return null;
 };
 
 const serviceFieldsError = (body: Record<string, unknown>, partial: boolean) => {
-  const allowed = ['name', 'description', 'price', 'duration', 'category', 'status'];
-  if (partial && Object.keys(body).some((field) => !allowed.includes(field) && !['audience', 'womenPrice', 'menPrice'].includes(field))) {
+  const allowed = ['name', 'description', 'price', 'duration', 'category', 'status', 'audience', 'womenPrice', 'menPrice'];
+  if (partial && Object.keys(body).some((field) => !allowed.includes(field))) {
     return 'Unknown service fields';
   }
   if ((!partial || body.name !== undefined) && !isText(body.name, textLimits.name)) return 'Name, category, a valid price and duration are required';
@@ -49,8 +60,15 @@ const serviceFieldsError = (body: Record<string, unknown>, partial: boolean) => 
   }
   if (!isOptionalText(body.description, textLimits.description)) return 'Description is too long';
   if (body.status !== undefined && !['active', 'inactive'].includes(String(body.status))) return 'Invalid status';
+  if (body.audience !== undefined && !['women', 'men', 'unisex'].includes(String(body.audience))) return 'Audience must be women, men or unisex';
+  if (!isOptionalAmount(body.womenPrice) || !isOptionalAmount(body.menPrice)) return 'Name, category, a valid price and duration are required';
   return null;
 };
+
+// Women/men prices: a number, or null to fall back on the base price.
+const audiencePrices = (body: Record<string, unknown>) => Object.fromEntries((['womenPrice', 'menPrice'] as const)
+  .filter((field) => body[field] !== undefined)
+  .map((field) => [field, body[field] === null ? null : Number(body[field])]));
 
 const trimmed = (value: unknown) => (typeof value === 'string' ? value.trim() : value);
 
@@ -75,7 +93,7 @@ export const resourceController = {
     if (invalid) return res.status(400).json({ error: invalid });
     try {
       const staff = await Staff.create({
-        ...pick(body, ['name', 'phone', 'position', 'commissionRate']),
+        ...pick(body, ['name', 'phone', 'position', 'commissionRate', 'payType', 'monthlySalary']),
         photoUrl: body.photoUrl || null,
       });
       res.status(201).json(staff);
@@ -93,9 +111,8 @@ export const resourceController = {
     try {
       const staff = await Staff.findByPk(id);
       if (!staff) return res.status(404).json({ error: 'Staff member not found' });
-      // payType and monthlySalary, sent by the web app, are not stored by this API version.
       await staff.update({
-        ...pick(body, ['name', 'phone', 'position', 'commissionRate', 'status']),
+        ...pick(body, ['name', 'phone', 'position', 'commissionRate', 'payType', 'monthlySalary', 'status']),
         ...(body.photoUrl !== undefined && { photoUrl: body.photoUrl || null }),
       });
       res.json(staff);
@@ -170,11 +187,12 @@ export const resourceController = {
   },
 
   createProduct: async (req: Request, res: Response) => {
-    const { name, sku, priceBuy, priceSell, quantityStock = 0, category, imageUrl, lowStockThreshold = 5 } = req.body ?? {};
+    const { name, sku, priceBuy, priceSell, quantityStock = 0, category, imageUrl, lowStockThreshold = 5, description } = req.body ?? {};
     if (typeof name !== 'string' || !name.trim() || typeof sku !== 'string' || !sku.trim() || typeof category !== 'string' || !category.trim() ||
         !Number.isFinite(Number(priceBuy)) || Number(priceBuy) < 0 || !Number.isFinite(Number(priceSell)) || Number(priceSell) < 0 ||
         !Number.isInteger(Number(quantityStock)) || Number(quantityStock) < 0 || !Number.isInteger(Number(lowStockThreshold)) || Number(lowStockThreshold) < 0 ||
-        (imageUrl != null && imageUrl !== '' && (typeof imageUrl !== 'string' || imageUrl.length > 255 || !/^https?:\/\/\S+$/i.test(imageUrl.trim())))) {
+        (imageUrl != null && imageUrl !== '' && !isProductImage(imageUrl)) ||
+        !isOptionalText(description, textLimits.description)) {
       return res.status(400).json({ error: 'Name, SKU, category and valid prices are required' });
     }
     try {
@@ -185,6 +203,7 @@ export const resourceController = {
           name: name.trim(), sku: sku.trim().toUpperCase(), priceBuy: Number(priceBuy), priceSell: Number(priceSell),
           quantityStock: Number(quantityStock), quantityReceived: Number(quantityStock), lowStockThreshold: Number(lowStockThreshold),
           category: category.trim(), imageUrl: imageUrl?.trim() || null, status: 'active',
+          description: typeof description === 'string' && description.trim() ? description.trim() : null,
         }, { transaction });
         if (Number(quantityStock) > 0) {
           await stockService.record(created.id, 'in', 'initial', Number(quantityStock), Number(quantityStock), { userId: (req as AuthRequest).user?.id, transaction });
@@ -202,7 +221,7 @@ export const resourceController = {
     if (!id) return res.status(400).json({ error: 'Invalid product ID' });
     try {
       const body = req.body ?? {};
-      const allowed = ['name', 'sku', 'priceBuy', 'priceSell', 'category', 'imageUrl', 'lowStockThreshold', 'status'];
+      const allowed = ['name', 'sku', 'priceBuy', 'priceSell', 'category', 'imageUrl', 'lowStockThreshold', 'status', 'description'];
       if (Object.keys(body).some((field) => !allowed.includes(field)) ||
           (body.name !== undefined && (typeof body.name !== 'string' || !body.name.trim())) ||
           (body.sku !== undefined && (typeof body.sku !== 'string' || !body.sku.trim())) ||
@@ -211,7 +230,8 @@ export const resourceController = {
           (body.priceSell !== undefined && (!Number.isFinite(Number(body.priceSell)) || Number(body.priceSell) < 0)) ||
           (body.lowStockThreshold !== undefined && (!Number.isInteger(Number(body.lowStockThreshold)) || Number(body.lowStockThreshold) < 0)) ||
           (body.status !== undefined && !['active', 'inactive'].includes(body.status)) ||
-          (body.imageUrl !== undefined && body.imageUrl !== null && body.imageUrl !== '' && (typeof body.imageUrl !== 'string' || body.imageUrl.length > 255 || !/^https?:\/\/\S+$/i.test(body.imageUrl.trim())))) {
+          !isOptionalText(body.description, textLimits.description) ||
+          (body.imageUrl !== undefined && body.imageUrl !== null && body.imageUrl !== '' && !isProductImage(body.imageUrl))) {
         return res.status(400).json({ error: 'Invalid product fields' });
       }
       const product = await Product.findByPk(id);
@@ -311,7 +331,10 @@ export const resourceController = {
     const invalid = serviceFieldsError(body, false);
     if (invalid) return res.status(400).json({ error: invalid });
     try {
-      const service = await Service.create(pick(body, ['name', 'description', 'price', 'duration', 'category']));
+      const service = await Service.create({
+        ...pick(body, ['name', 'description', 'price', 'duration', 'category', 'audience']),
+        ...audiencePrices(body),
+      });
       res.status(201).json(service);
     } catch {
       res.status(400).json({ error: 'Failed to create service' });
@@ -327,8 +350,10 @@ export const resourceController = {
     try {
       const service = await Service.findByPk(id);
       if (!service) return res.status(404).json({ error: 'Service not found' });
-      // audience, womenPrice and menPrice, sent by the web app, are not stored by this API version.
-      await service.update(pick(body, ['name', 'description', 'price', 'duration', 'category', 'status']));
+      await service.update({
+        ...pick(body, ['name', 'description', 'price', 'duration', 'category', 'status', 'audience']),
+        ...audiencePrices(body),
+      });
       res.json(service);
     } catch {
       res.status(400).json({ error: 'Failed to update service' });

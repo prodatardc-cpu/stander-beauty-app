@@ -1,5 +1,6 @@
 import { DataTypes, Model } from 'sequelize';
 import { sequelize } from '../config/database';
+import type { Currency } from '../utils/money';
 
 export class Commission extends Model {
   declare id: string;
@@ -12,6 +13,8 @@ export class Commission extends Model {
   declare paid: boolean;
   declare paymentDate?: Date;
   declare paymentId: string | null;
+  declare currency: Currency;
+  declare cancelledAt: Date | null;
 }
 
 Commission.init(
@@ -50,6 +53,16 @@ Commission.init(
       defaultValue: false,
     },
     paymentDate: {
+      type: DataTypes.DATE,
+      allowNull: true,
+    },
+    // Currency of the sale the commission comes from: commissions are totalled and paid per currency.
+    currency: {
+      type: DataTypes.STRING(3),
+      allowNull: false,
+    },
+    // Set when its sale is cancelled: the commission is no longer earned but stays on record.
+    cancelledAt: {
       type: DataTypes.DATE,
       allowNull: true,
     },

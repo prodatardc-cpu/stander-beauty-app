@@ -4,9 +4,9 @@ import { useNavigate } from 'react-router-dom';
 import type { Staff, User } from '../types';
 import { logout, setUser } from '../redux/slices/authSlice';
 import { apiClient, checkApiStatus, getApiError } from '../services/api';
-import { setCurrency, setExchangeRate, useCurrency, useExchangeRate } from '../services/currency';
+import { saveSettings, useCurrency, useExchangeRate, useSalonSettings, type Currency, type SalonSettings } from '../services/currency';
 import { formatDate, roleLabels } from '../utils/format';
-import { useCurrentUser } from '../hooks/useAuth';
+import { useCan, useCurrentUser } from '../hooks/useAuth';
 import { useFeedback } from '../components/UI/Feedback';
 import { PageHeader } from '../components/UI/PageHeader';
 import { Modal } from '../components/UI/Modal';
@@ -14,6 +14,11 @@ import { Modal } from '../components/UI/Modal';
 const emptyPasswords = { currentPassword: '', newPassword: '', confirmPassword: '' };
 const emptyAccount = { email: '', password: '', role: 'staff' as 'staff' | 'cashier' };
 const assignableRoles = ['staff', 'cashier'] as const;
+type BusinessForm = Pick<SalonSettings, 'businessName' | 'payPeriod'> & { businessEmail: string; businessPhone: string; taxId: string; businessAddress: string };
+const toBusinessForm = (settings: SalonSettings): BusinessForm => ({
+  businessName: settings.businessName, payPeriod: settings.payPeriod,
+  businessEmail: settings.businessEmail ?? '', businessPhone: settings.businessPhone ?? '', taxId: settings.taxId ?? '', businessAddress: settings.businessAddress ?? '',
+});
 
 export const SettingsPage = () => {
   const dispatch = useDispatch();
@@ -21,6 +26,9 @@ export const SettingsPage = () => {
   const user = useCurrentUser();
   const currency = useCurrency();
   const exchangeRate = useExchangeRate();
+  const salonSettings = useSalonSettings();
+  const [business, setBusiness] = useState<BusinessForm>(() => toBusinessForm(salonSettings));
+  const [savingBusiness, setSavingBusiness] = useState(false);
   const { notify, confirm } = useFeedback();
   const [apiStatus, setApiStatus] = useState<'loading' | 'online' | 'degraded' | 'offline'>('loading');
   const [passwords, setPasswords] = useState(emptyPasswords);
@@ -28,15 +36,26 @@ export const SettingsPage = () => {
   const [users, setUsers] = useState<User[]>([]);
   const [teamMembers, setTeamMembers] = useState<Staff[]>([]);
   const isAdmin = user?.role === 'admin';
+  const canManageSettings = useCan('manageSettings');
   const [account, setAccount] = useState<typeof emptyAccount | null>(null);
   const [resetTarget, setResetTarget] = useState<User | null>(null);
   const [resetPassword, setResetPassword] = useState('');
   const [savingAccount, setSavingAccount] = useState(false);
   const [exchangeRateInput, setExchangeRateInput] = useState(() => exchangeRate === null ? '' : String(exchangeRate));
 
-  useEffect(() => {
+  // Follow the salon details when they load or change on another device; adjusted during render.
+  const [shownSettings, setShownSettings] = useState(salonSettings);
+  if (shownSettings !== salonSettings) {
+    setShownSettings(salonSettings);
+    setBusiness(toBusinessForm(salonSettings));
+  }
+
+  // Follow the salon's rate when it changes (saved here or on another device); adjusted during render.
+  const [shownExchangeRate, setShownExchangeRate] = useState(exchangeRate);
+  if (shownExchangeRate !== exchangeRate) {
+    setShownExchangeRate(exchangeRate);
     setExchangeRateInput(exchangeRate === null ? '' : String(exchangeRate));
-  }, [exchangeRate]);
+  }
 
   useEffect(() => {
     void checkApiStatus().then(setApiStatus);
@@ -129,15 +148,57 @@ export const SettingsPage = () => {
     navigate('/login', { replace: true });
   };
 
-  const saveExchangeRate = (event: FormEvent) => {
+  const saveExchangeRate = async (event: FormEvent) => {
     event.preventDefault();
     const rate = Number(exchangeRateInput.trim().replace(',', '.'));
     if (!Number.isFinite(rate) || rate <= 0) {
       notify('Saisissez un taux supérieur à zéro, en francs congolais pour 1 USD.', 'error');
       return;
     }
-    setExchangeRate(rate);
-    notify(`Taux enregistré : 1 USD = ${new Intl.NumberFormat('fr-FR').format(rate)} CDF.`);
+    try {
+      await saveSettings({ usdToCdfRate: rate });
+      notify(`Taux enregistré pour tout le salon : 1 USD = ${new Intl.NumberFormat('fr-FR').format(rate)} CDF.`);
+    } catch (requestError) {
+      notify(getApiError(requestError, 'Impossible d’enregistrer le taux.'), 'error');
+    }
+  };
+
+  const saveBusiness = async (event: FormEvent) => {
+    event.preventDefault();
+    setSavingBusiness(true);
+    try {
+      await saveSettings({
+        businessName: business.businessName.trim(), payPeriod: business.payPeriod,
+        businessEmail: business.businessEmail.trim() || null, businessPhone: business.businessPhone.trim() || null,
+        taxId: business.taxId.trim() || null, businessAddress: business.businessAddress.trim() || null,
+      });
+      notify('Informations de l’établissement enregistrées : elles figurent sur les reçus.');
+    } catch (requestError) {
+      notify(getApiError(requestError, 'Impossible d’enregistrer ces informations. Vérifiez l’adresse e-mail.'), 'error');
+    } finally {
+      setSavingBusiness(false);
+    }
+  };
+
+  // Catalogue prices, salaries and client totals are converted at the current rate (server side).
+  const changeBaseCurrency = async (next: Currency) => {
+    if (next === currency) return;
+    if (!exchangeRate) {
+      notify('Enregistrez d’abord le taux du dollar : il sert à convertir les prix.', 'error');
+      return;
+    }
+    const accepted = await confirm({
+      title: `Passer en ${next === 'CDF' ? 'francs congolais' : 'dollars'} ?`,
+      message: `Les prix du catalogue, les salaires et les totaux clients seront convertis au taux de 1 USD = ${new Intl.NumberFormat('fr-FR').format(exchangeRate)} CDF, pour tous les postes. Les ventes passées gardent leur devise.`,
+      confirmLabel: 'Convertir',
+    });
+    if (!accepted) return;
+    try {
+      await saveSettings({ baseCurrency: next });
+      notify(`Devise de base : ${next}. Les prix ont été convertis.`);
+    } catch (requestError) {
+      notify(getApiError(requestError, 'Impossible de changer la devise de base.'), 'error');
+    }
   };
 
   return <section className="space-y-6">
@@ -150,20 +211,20 @@ export const SettingsPage = () => {
           <div className="list-row"><span className="text-gray-600">Adresse e-mail</span><span className="cell-title">{user?.email ?? '—'}</span></div>
           <div className="list-row"><span className="text-gray-600">Rôle</span><span className="cell-title">{user ? roleLabels[user.role] : '—'}</span></div>
           <div className="list-row">
-            <span><span className="text-gray-600">Devise de base</span><span className="cell-sub">Les montants sont aussi affichés dans l’autre devise.</span></span>
-            <select aria-label="Devise du salon" value={currency} onChange={(event) => setCurrency(event.target.value as 'USD' | 'CDF')} className="px-3 py-2 text-sm">
+            <span><span className="text-gray-600">Devise de base</span><span className="cell-sub">Commune à tous les postes. Les montants sont aussi affichés dans l’autre devise.</span></span>
+            {canManageSettings ? <select aria-label="Devise du salon" value={currency} onChange={(event) => void changeBaseCurrency(event.target.value as Currency)} className="px-3 py-2 text-sm">
               <option value="CDF">Franc congolais (CDF)</option>
               <option value="USD">Dollar américain (USD)</option>
-            </select>
+            </select> : <span className="cell-title">{currency === 'CDF' ? 'Franc congolais (CDF)' : 'Dollar américain (USD)'}</span>}
           </div>
           <div className="list-row exchange-rate-row">
-            <span><span className="text-gray-600">Taux du dollar</span><span className="cell-sub">Indiquez le nombre de CDF pour 1 USD.</span></span>
-            <form className="exchange-rate-form" onSubmit={saveExchangeRate}>
+            <span><span className="text-gray-600">Taux du dollar</span><span className="cell-sub">{canManageSettings ? 'Indiquez le nombre de CDF pour 1 USD.' : 'Fixé par l’administrateur.'}</span></span>
+            {canManageSettings ? <form className="exchange-rate-form" onSubmit={(event) => void saveExchangeRate(event)}>
               <label className="sr-only" htmlFor="usd-cdf-rate">Francs congolais pour un dollar</label>
               <input id="usd-cdf-rate" type="number" min="0.01" step="any" inputMode="decimal" placeholder="Ex. 2800" value={exchangeRateInput} onChange={(event) => setExchangeRateInput(event.target.value)} />
               <span className="exchange-rate-unit">CDF / USD</span>
               <button type="submit" className="btn btn-secondary">Enregistrer</button>
-            </form>
+            </form> : <span className="cell-title">{exchangeRate ? `1 USD = ${new Intl.NumberFormat('fr-FR').format(exchangeRate)} CDF` : 'Non défini'}</span>}
           </div>
         </div>
         <div className="mt-5 flex flex-wrap justify-end gap-2">
@@ -182,6 +243,18 @@ export const SettingsPage = () => {
         </form>
       </section>
     </div>
+
+    <section className="panel">
+      <div className="panel-header"><h2 className="section-title">Établissement</h2><span className="cell-sub">Imprimé en tête des reçus</span></div>
+      <form onSubmit={saveBusiness} className="form-grid">
+        <label className="field">Nom de l’établissement<input required maxLength={120} disabled={!canManageSettings} value={business.businessName} onChange={(event) => setBusiness({ ...business, businessName: event.target.value })} /></label>
+        <label className="field">E-mail professionnel<input type="email" maxLength={254} disabled={!canManageSettings} value={business.businessEmail} onChange={(event) => setBusiness({ ...business, businessEmail: event.target.value })} /></label>
+        <label className="field">Téléphone<input type="tel" maxLength={40} disabled={!canManageSettings} value={business.businessPhone} onChange={(event) => setBusiness({ ...business, businessPhone: event.target.value })} /></label>
+        <label className="field">N° d’impôt (NIF)<input maxLength={60} disabled={!canManageSettings} value={business.taxId} onChange={(event) => setBusiness({ ...business, taxId: event.target.value })} /></label>
+        <label className="field field-wide">Adresse<input maxLength={255} disabled={!canManageSettings} value={business.businessAddress} onChange={(event) => setBusiness({ ...business, businessAddress: event.target.value })} /></label>
+        {canManageSettings && <div className="field-wide flex justify-end"><button type="submit" className="btn btn-primary" disabled={savingBusiness}>{savingBusiness ? 'Enregistrement…' : 'Enregistrer'}</button></div>}
+      </form>
+    </section>
 
     {isAdmin && <section className="space-y-3">
       <div className="flex flex-wrap items-end justify-between gap-3">

@@ -9,6 +9,9 @@ export class Service extends Model {
   declare duration: number;
   declare category: string;
   declare status: 'active' | 'inactive';
+  declare audience: 'women' | 'men' | 'unisex';
+  declare womenPrice: number | string | null;
+  declare menPrice: number | string | null;
 }
 
 Service.init(
@@ -41,6 +44,20 @@ Service.init(
     status: {
       type: DataTypes.ENUM('active', 'inactive'),
       defaultValue: 'active',
+    },
+    // Who the service is for; womenPrice/menPrice override price for that audience when set.
+    audience: {
+      type: DataTypes.STRING(10),
+      allowNull: false,
+      defaultValue: 'unisex',
+    },
+    womenPrice: {
+      type: DataTypes.DECIMAL(10, 2),
+      allowNull: true,
+    },
+    menPrice: {
+      type: DataTypes.DECIMAL(10, 2),
+      allowNull: true,
     },
   },
   {

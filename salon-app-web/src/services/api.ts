@@ -93,6 +93,12 @@ const knownErrors: Record<string, string> = {
   'Active service not found': 'Prestation introuvable ou retirée.',
   'Client not found': 'Client introuvable ou archivé.',
   'Commission rate must be between 0 and 100': 'Le taux de commission doit être compris entre 0 et 100 %.',
+  'Prices or exchange rate changed; reload the till': 'Les prix ou le taux ont changé entre-temps : vérifiez le panier mis à jour puis validez à nouveau.',
+  'No exchange rate is configured for this currency': 'Aucun taux USD/CDF n’est défini : l’administrateur doit le saisir dans Paramètres.',
+  'An exchange rate is required to change the base currency': 'Enregistrez d’abord le taux du dollar : il sert à convertir les prix.',
+  'Pay type must be commission or fixed': 'Choisissez une rémunération à la commission ou un salaire fixe.',
+  'Monthly salary must be a positive amount': 'Le salaire mensuel doit être un montant positif.',
+  'Audience must be women, men or unisex': 'Choisissez la clientèle : femmes, hommes ou mixte.',
 };
 
 export const getApiError = (error: unknown, fallback: string) => {

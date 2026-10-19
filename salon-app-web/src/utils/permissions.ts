@@ -8,6 +8,11 @@ const policy = {
   recordAttendance: ['admin', 'cashier'],
   closeDay: ['admin', 'cashier'],
   readAnyStaffFinancials: ['admin'],
+  manageSettings: ['admin'],
+  cancelSales: ['admin'],
+  readHistory: ['admin', 'cashier'],
+  recordCash: ['admin', 'cashier'],
+  payCommissions: ['admin'],
 } as const satisfies Record<string, readonly Role[]>;
 
 export type Permission = keyof typeof policy;

@@ -93,7 +93,8 @@ describe('client removal and validation', () => {
     const sale = await recordSale({ clientId: client.id, items: [{ type: 'service', itemId: service.id, quantity: 1 }] });
     assert.equal(sale.status, 201);
     // 23001 = restrict_violation (ON DELETE RESTRICT).
-    const isRestrictViolation = (error: Error & { parent?: { code?: string } }) => error.parent?.code === '23001';
+    // PostgreSQL reports a refused delete (ON DELETE RESTRICT or NO ACTION) as foreign_key_violation.
+    const isRestrictViolation = (error: Error & { parent?: { code?: string } }) => error.parent?.code === '23503';
     await assert.rejects(Client.destroy({ where: { id: client.id } }), isRestrictViolation);
     await assert.rejects(Sale.destroy({ where: { id: sale.body.id } }), isRestrictViolation);
     assert.ok(await Client.findByPk(client.id));

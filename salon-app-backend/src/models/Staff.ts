@@ -10,6 +10,8 @@ export class Staff extends Model {
   declare status: 'active' | 'inactive';
   declare workingHours: unknown;
   declare commissionRate: number;
+  declare payType: 'commission' | 'fixed';
+  declare monthlySalary: number | string;
   declare archivedAt: Date | null;
 }
 
@@ -47,6 +49,18 @@ Staff.init(
     commissionRate: {
       type: DataTypes.DECIMAL(5, 2),
       defaultValue: 40,
+    },
+    // Members on a fixed salary earn no commission on the services they perform.
+    payType: {
+      type: DataTypes.STRING(20),
+      allowNull: false,
+      defaultValue: 'commission',
+    },
+    // In the salon's base currency.
+    monthlySalary: {
+      type: DataTypes.DECIMAL(12, 2),
+      allowNull: false,
+      defaultValue: 0,
     },
     // Set when an administrator removes a member who has history (sales, commissions, attendance).
     archivedAt: {

@@ -1,13 +1,32 @@
 import type { Request, Response } from 'express';
 import { Op } from 'sequelize';
 import { Appointment } from '../models/Appointment';
+import { Attendance } from '../models/Attendance';
 import { Client } from '../models/Client';
 import { Product } from '../models/Product';
 import { Service } from '../models/Service';
+import { Staff } from '../models/Staff';
+import { policy, type Role } from '../config/permissions';
+import type { AuthRequest } from '../middleware/authMiddleware';
 import { ReportArchive } from '../models/ReportArchive';
 import { reportService } from '../services/reportService';
+import { settingsService } from '../services/settingsService';
+import { isCurrency } from '../utils/money';
+import { isUuid } from '../utils/validators';
 
-const getDateRange = (req: Request): { startDate: Date; endDate: Date } | null => {
+// Freezes the figures of a period. The summary columns hold the base-currency figures; breakdown
+// keeps both currencies (and the sales recorded without one).
+const archiveDefaults = async (kind: 'daily' | 'annual', periodKey: string, periodStart: Date, periodEnd: Date) => {
+  const [report, settings] = await Promise.all([reportService.getReportByPeriod(periodStart, periodEnd), settingsService.get()]);
+  return {
+    kind, periodKey, periodStart, periodEnd,
+    ...report.byCurrency[settings.baseCurrency],
+    breakdown: { baseCurrency: settings.baseCurrency, byCurrency: report.byCurrency, unclassifiedSales: report.unclassifiedSales },
+    closedAt: new Date(),
+  };
+};
+
+export const getDateRange = (req: Request): { startDate: Date; endDate: Date } | null => {
   const { startDate, endDate } = req.query;
   if (typeof startDate !== 'string' || typeof endDate !== 'string') return null;
 
@@ -36,37 +55,13 @@ export const reportController = {
       const startOfTomorrow = new Date(startOfDay);
       startOfTomorrow.setDate(startOfTomorrow.getDate() + 1);
       const [clients, products, services, appointmentsToday, dashboard] = await Promise.all([
-        Client.count(),
+        Client.count({ where: { archivedAt: null } }),
         Product.count(),
-        Service.count(),
+        Service.count({ where: { status: 'active' } }),
         Appointment.count({ where: { scheduledAt: { [Op.gte]: startOfDay, [Op.lt]: startOfTomorrow } } }),
         reportService.getDashboardStats(),
       ]);
-      res.json({
-        clients,
-        products,
-        services,
-        appointmentsToday,
-        revenueToday: dashboard.todayRevenue,
-        revenueTodayUSD: dashboard.todayRevenueUSD,
-        revenueTodayCDF: dashboard.todayRevenueCDF,
-        salesTodayUSDCount: dashboard.salesTodayUSDCount,
-        salesTodayCDFCount: dashboard.salesTodayCDFCount,
-        unclassifiedSalesToday: dashboard.unclassifiedSalesToday,
-        amountReceivedTodayUSD: dashboard.amountReceivedTodayUSD,
-        amountReceivedTodayCDF: dashboard.amountReceivedTodayCDF,
-        servicesToday: dashboard.todayServiceCount,
-        serviceRevenueToday: dashboard.todayServiceRevenue,
-        serviceRevenueTodayUSD: dashboard.todayServiceRevenueUSD,
-        serviceRevenueTodayCDF: dashboard.todayServiceRevenueCDF,
-        productsSoldToday: dashboard.todayProductCount,
-        productRevenueToday: dashboard.todayProductRevenue,
-        productRevenueTodayUSD: dashboard.todayProductRevenueUSD,
-        productRevenueTodayCDF: dashboard.todayProductRevenueCDF,
-        unpaidCommissions: dashboard.unpaidCommissions,
-        unpaidCommissionsUSD: dashboard.unpaidCommissionsUSD,
-        unpaidCommissionsCDF: dashboard.unpaidCommissionsCDF,
-      });
+      res.json({ clients, products, services, appointmentsToday, ...dashboard });
     } catch {
       res.status(500).json({ error: 'Failed to load dashboard report' });
     }
@@ -82,6 +77,58 @@ export const reportController = {
     }
   },
 
+  // Filters: staffId, type (service|product), currency.
+  sales: async (req: Request, res: Response) => {
+    const range = getDateRange(req);
+    if (!range) return invalidDateRange(res);
+    const { staffId, type, currency } = req.query;
+    if ((staffId !== undefined && !isUuid(staffId)) || (type !== undefined && type !== 'service' && type !== 'product') ||
+        (currency !== undefined && !isCurrency(currency))) {
+      return res.status(400).json({ error: 'Invalid report filters' });
+    }
+    try {
+      res.json(await reportService.getSalesReport(range.startDate, range.endDate, {
+        staffId: staffId as string | undefined, type: type as 'service' | 'product' | undefined, currency: currency as 'USD' | 'CDF' | undefined,
+      }));
+    } catch {
+      res.status(500).json({ error: 'Failed to load sales report' });
+    }
+  },
+
+  cash: async (req: Request, res: Response) => {
+    const range = getDateRange(req);
+    if (!range) return invalidDateRange(res);
+    try {
+      res.json(await reportService.getCashReport(range.startDate, range.endDate));
+    } catch {
+      res.status(500).json({ error: 'Failed to load cash report' });
+    }
+  },
+
+  // status: open (default) | settled | all; currency optional.
+  debts: async (req: Request, res: Response) => {
+    const status = req.query.status ?? 'open';
+    const { currency } = req.query;
+    if (!['open', 'settled', 'all'].includes(String(status)) || (currency !== undefined && !isCurrency(currency))) {
+      return res.status(400).json({ error: 'Invalid report filters' });
+    }
+    try {
+      res.json(await reportService.getDebtsReport(status as 'open' | 'settled' | 'all', currency as 'USD' | 'CDF' | undefined));
+    } catch {
+      res.status(500).json({ error: 'Failed to load debts report' });
+    }
+  },
+
+  team: async (req: Request, res: Response) => {
+    const range = getDateRange(req);
+    if (!range) return invalidDateRange(res);
+    try {
+      res.json(await reportService.getTeamReport(range.startDate, range.endDate));
+    } catch {
+      res.status(500).json({ error: 'Failed to load team report' });
+    }
+  },
+
   archives: async (req: Request, res: Response) => {
     const kind = req.query.kind;
     if (kind != null && kind !== 'daily' && kind !== 'annual') return res.status(400).json({ error: 'Archive kind must be daily or annual' });
@@ -89,6 +136,46 @@ export const reportController = {
       return res.json(await ReportArchive.findAll({ where: kind ? { kind } : {}, order: [['periodStart', 'DESC']] }));
     } catch {
       return res.status(500).json({ error: 'Failed to load report archives' });
+    }
+  },
+
+  // Roll call of the period (attendance list): one row per current member, and per archived member
+  // who was marked during the period, with the days present and absent.
+  attendance: async (req: Request, res: Response) => {
+    const { startDate, endDate } = req.query;
+    const isDay = (value: unknown): value is string => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value);
+    if (!isDay(startDate) || !isDay(endDate) || startDate > endDate) return invalidDateRange(res);
+    try {
+      const [records, staff] = await Promise.all([
+        Attendance.findAll({ where: { attendanceDate: { [Op.between]: [startDate, endDate] } }, order: [['attendanceDate', 'ASC']] }),
+        Staff.findAll({ order: [['name', 'ASC']] }),
+      ]);
+      const rows = staff
+        .map((member) => {
+          const days = records.filter((record) => record.staffId === member.id).map((record) => ({ date: record.attendanceDate, status: record.status }));
+          return {
+            staffId: member.id, name: member.name, position: member.position, archived: Boolean(member.archivedAt), days,
+            present: days.filter((day) => day.status === 'present').length, absent: days.filter((day) => day.status === 'absent').length,
+          };
+        })
+        .filter((row) => !row.archived || row.days.length);
+      return res.json({ recordedDays: new Set(records.map((record) => record.attendanceDate)).size, staff: rows });
+    } catch {
+      return res.status(500).json({ error: 'Failed to load attendance report' });
+    }
+  },
+
+  // Removes a closure only: the period's sales, expenses and payments are kept and the period can be closed again.
+  deleteArchive: async (req: AuthRequest, res: Response) => {
+    try {
+      const archive = await ReportArchive.findByPk(String(req.params.id));
+      if (!archive) return res.status(404).json({ error: 'Report archive not found' });
+      const allowed: readonly Role[] = archive.kind === 'annual' ? policy.closeYear : policy.closeDay;
+      if (!req.user || !allowed.includes(req.user.role)) return res.status(403).json({ error: 'Access denied' });
+      await archive.destroy();
+      return res.json({ message: 'Report archive deleted' });
+    } catch {
+      return res.status(500).json({ error: 'Failed to delete the report archive' });
     }
   },
 
@@ -105,18 +192,9 @@ export const reportController = {
     const periodEnd = new Date(year, month - 1, day + 1);
     periodEnd.setMilliseconds(periodEnd.getMilliseconds() - 1);
     try {
-      const report = await reportService.getReportByPeriod(periodStart, periodEnd);
       const [archive, created] = await ReportArchive.findOrCreate({
         where: { kind: 'daily', periodKey: date },
-        defaults: {
-          kind: 'daily', periodKey: date, periodStart, periodEnd,
-          totalSales: report.totalSales, amountReceived: report.amountReceived,
-          outstandingAmount: report.outstandingAmount, serviceRevenue: report.serviceRevenue,
-          productRevenue: report.productRevenue, totalExpenses: report.totalExpenses,
-          netBalance: report.netBalance, totalCommissions: report.totalCommissions,
-          transactionCount: report.transactionCount, expenseCount: report.expenseCount,
-          closedAt: new Date(),
-        },
+        defaults: await archiveDefaults('daily', date, periodStart, periodEnd),
       });
       return res.status(created ? 201 : 200).json({ archive, alreadyClosed: !created });
     } catch {
@@ -135,18 +213,9 @@ export const reportController = {
     const periodEnd = new Date(year + 1, 0, 1);
     periodEnd.setMilliseconds(periodEnd.getMilliseconds() - 1);
     try {
-      const report = await reportService.getReportByPeriod(periodStart, periodEnd);
       const [archive, created] = await ReportArchive.findOrCreate({
         where: { kind: 'annual', periodKey },
-        defaults: {
-          kind: 'annual', periodKey, periodStart, periodEnd,
-          totalSales: report.totalSales, amountReceived: report.amountReceived,
-          outstandingAmount: report.outstandingAmount, serviceRevenue: report.serviceRevenue,
-          productRevenue: report.productRevenue, totalExpenses: report.totalExpenses,
-          netBalance: report.netBalance, totalCommissions: report.totalCommissions,
-          transactionCount: report.transactionCount, expenseCount: report.expenseCount,
-          closedAt: new Date(),
-        },
+        defaults: await archiveDefaults('annual', periodKey, periodStart, periodEnd),
       });
       return res.status(created ? 201 : 200).json({ archive, alreadyClosed: !created, historyPreserved: true });
     } catch {

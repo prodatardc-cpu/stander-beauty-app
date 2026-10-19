@@ -129,7 +129,8 @@ describe('staff member removal', () => {
     assert.ok(await Staff.findByPk(member.id));
 
     // These two used to cascade (attendance deleted) or silently detach (sale.staffId set to NULL).
-    const isRestrictViolation = (error: Error & { parent?: { code?: string } }) => error.parent?.code === '23001';
+    // PostgreSQL reports a refused delete (ON DELETE RESTRICT or NO ACTION) as foreign_key_violation.
+    const isRestrictViolation = (error: Error & { parent?: { code?: string } }) => error.parent?.code === '23503';
     const attendanceOnly = await createStaffMember();
     await Attendance.create({ staffId: attendanceOnly.id, attendanceDate: '2026-10-14', status: 'present' });
     await assert.rejects(Staff.destroy({ where: { id: attendanceOnly.id } }), isRestrictViolation);

@@ -1,44 +1,74 @@
 import { useSyncExternalStore } from 'react';
+import { apiClient } from './api';
 
 export type Currency = 'USD' | 'CDF';
+export type SalonSettings = {
+  baseCurrency: Currency;
+  usdToCdfRate: number | null;
+  payPeriod: 'weekly' | 'monthly';
+  // Printed at the top of receipts.
+  businessName: string;
+  businessEmail: string | null;
+  businessPhone: string | null;
+  taxId: string | null;
+  businessAddress: string | null;
+};
 
-const storageKey = 'standerBeauty.currency';
-const exchangeRateStorageKey = 'standerBeauty.usdToCdfRate';
-const changeEvent = 'stander-beauty-currency-change';
+// The base currency and the USD/CDF rate belong to the salon, not to a browser: they are read from
+// the API (GET /settings) and changed by the administrator (PUT /settings) for every device at once.
+const defaults: SalonSettings = {
+  baseCurrency: 'USD', usdToCdfRate: null, payPeriod: 'monthly',
+  businessName: 'Stander Beauty', businessEmail: null, businessPhone: null, taxId: null, businessAddress: null,
+};
+let settings: SalonSettings = defaults;
+const listeners = new Set<() => void>();
 
-const readCurrency = (): Currency => {
-  if (typeof window === 'undefined') return 'USD';
-  return window.localStorage.getItem(storageKey) === 'CDF' ? 'CDF' : 'USD';
+const apply = (next: SalonSettings) => {
+  settings = {
+    ...defaults, ...next,
+    baseCurrency: next.baseCurrency === 'CDF' ? 'CDF' : 'USD', usdToCdfRate: next.usdToCdfRate ? Number(next.usdToCdfRate) : null,
+  };
+  for (const listener of listeners) listener();
 };
 
 const subscribe = (listener: () => void) => {
-  window.addEventListener(changeEvent, listener);
-  window.addEventListener('storage', listener);
-  return () => {
-    window.removeEventListener(changeEvent, listener);
-    window.removeEventListener('storage', listener);
-  };
+  listeners.add(listener);
+  return () => { listeners.delete(listener); };
 };
 
-export const setCurrency = (currency: Currency) => {
-  window.localStorage.setItem(storageKey, currency);
-  window.dispatchEvent(new Event(changeEvent));
+// Earlier versions kept these per browser; they are no longer read.
+try {
+  window.localStorage.removeItem('standerBeauty.currency');
+  window.localStorage.removeItem('standerBeauty.usdToCdfRate');
+} catch {
+  // Storage unavailable: nothing to clean.
+}
+
+export const loadSettings = async () => {
+  const { data } = await apiClient.get<SalonSettings>('/settings');
+  apply(data);
 };
 
-const readExchangeRate = (): number | null => {
-  if (typeof window === 'undefined') return null;
-  const storedRate = Number(window.localStorage.getItem(exchangeRateStorageKey));
-  return Number.isFinite(storedRate) && storedRate > 0 ? storedRate : null;
+// Administrator only. Changing the base currency converts catalogue prices at the rate (server side).
+export const saveSettings = async (changes: Partial<SalonSettings>) => {
+  const { data } = await apiClient.put<SalonSettings>('/settings', changes);
+  apply(data);
+  return settings;
 };
 
-export const setExchangeRate = (rate: number | null) => {
-  if (rate === null) window.localStorage.removeItem(exchangeRateStorageKey);
-  else window.localStorage.setItem(exchangeRateStorageKey, String(rate));
-  window.dispatchEvent(new Event(changeEvent));
-};
+export const useCurrency = (): Currency => useSyncExternalStore(subscribe, () => settings.baseCurrency, () => defaults.baseCurrency);
+export const useExchangeRate = (): number | null => useSyncExternalStore(subscribe, () => settings.usdToCdfRate, () => defaults.usdToCdfRate);
+export const useSalonSettings = (): SalonSettings => useSyncExternalStore(subscribe, () => settings, () => defaults);
 
-export const useCurrency = (): Currency => useSyncExternalStore<Currency>(subscribe, readCurrency, () => 'USD');
-export const useExchangeRate = (): number | null => useSyncExternalStore<number | null>(subscribe, readExchangeRate, () => null);
+// Same rounding as the API (salon-app-backend/src/utils/money.ts): to the cent in USD, to the franc
+// in CDF. Sale prices computed here must match the server's to the unit.
+export const roundMoney = (value: number, currency: Currency) =>
+  currency === 'CDF' ? Math.round(value) : Math.round(value * 100) / 100;
+
+export const convertMoney = (amount: number, from: Currency, to: Currency, usdToCdfRate: number) => {
+  if (from === to) return amount;
+  return from === 'USD' ? amount * usdToCdfRate : amount / usdToCdfRate;
+};
 
 const formatSingleCurrency = (value: number, currency: Currency) =>
   new Intl.NumberFormat('fr-FR', {
@@ -51,13 +81,8 @@ const formatSingleCurrency = (value: number, currency: Currency) =>
 export const formatCurrencyExact = (value: number | string, currency: Currency) =>
   formatSingleCurrency(Number(value), currency);
 
-export const formatCurrency = (value: number | string, currency: Currency) => {
-  const amount = Number(value);
-  const primary = formatSingleCurrency(amount, currency);
-  const rate = readExchangeRate();
-  if (!rate || !Number.isFinite(amount)) return primary;
+// An amount in its own currency. Amounts are never shown converted into the other currency: the
+// only conversion is the one the cashier chooses explicitly at the till, with the rate displayed.
+export const formatCurrency = (value: number | string, currency: Currency) => formatSingleCurrency(Number(value), currency);
 
-  const alternateCurrency = currency === 'USD' ? 'CDF' : 'USD';
-  const convertedAmount = currency === 'USD' ? amount * rate : amount / rate;
-  return `${primary} · ${formatSingleCurrency(convertedAmount, alternateCurrency)}`;
-};
+export const currencyLabels: Record<Currency, string> = { USD: 'Dollar américain (USD)', CDF: 'Franc congolais (CDF)' };

@@ -136,4 +136,208 @@ export const migrations: Migration[] = [
       await run('CREATE INDEX IF NOT EXISTS "commissions_staff_id_paid" ON "commissions" ("staffId", "paid")');
     },
   },
+  {
+    // Makes the data consistent across devices and currencies:
+    // - salon_settings: base currency and USD/CDF rate shared by every device (were kept per browser);
+    // - commissions, their payments and expenses record their currency and are totalled per currency.
+    //   Rows recorded before this migration take the currency of their sale when it is known,
+    //   otherwise USD (the API's and the web app's default until now);
+    // - services keep their audience and women/men prices, sale lines the audience charged;
+    // - staff keep their pay type (commission or fixed salary) and monthly salary;
+    // - sales keep their total in the base currency, which is what the client's total adds up;
+    // - report archives keep their figures per currency.
+    name: '006-currencies-and-consistent-catalog',
+    up: async ({ sequelize, transaction }) => {
+      const run = (sql: string) => sequelize.query(sql, { transaction });
+      const currencyCheck = (table: string, column = 'currency') =>
+        run(`ALTER TABLE ${quote(table)} ADD CONSTRAINT ${quote(`${table}_${column}_check`)} CHECK (${quote(column)} IN ('USD', 'CDF'))`);
+
+      await run(`CREATE TABLE IF NOT EXISTS "salon_settings" (
+        "id" SMALLINT PRIMARY KEY DEFAULT 1 CHECK ("id" = 1),
+        "baseCurrency" VARCHAR(3) NOT NULL DEFAULT 'USD' CHECK ("baseCurrency" IN ('USD', 'CDF')),
+        "usdToCdfRate" DECIMAL(12, 4) CHECK ("usdToCdfRate" > 0),
+        "updatedByUserId" UUID,
+        "createdAt" TIMESTAMPTZ NOT NULL DEFAULT now(),
+        "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT now()
+      )`);
+      await run('INSERT INTO "salon_settings" ("id") VALUES (1) ON CONFLICT ("id") DO NOTHING');
+
+      await run('ALTER TABLE "commissions" ADD COLUMN IF NOT EXISTS "currency" VARCHAR(3)');
+      await run(`UPDATE "commissions" AS c SET "currency" = s."currency"
+        FROM "sale_items" AS i JOIN "sales" AS s ON s."id" = i."saleId"
+        WHERE c."saleItemId" = i."id" AND c."currency" IS NULL AND s."currency" IN ('USD', 'CDF')`);
+      await run(`UPDATE "commissions" SET "currency" = 'USD' WHERE "currency" IS NULL`);
+      await run('ALTER TABLE "commissions" ALTER COLUMN "currency" SET NOT NULL');
+      await currencyCheck('commissions');
+      await run('CREATE INDEX IF NOT EXISTS "commissions_staff_id_currency_paid" ON "commissions" ("staffId", "currency", "paid")');
+
+      await run('ALTER TABLE "commission_payments" ADD COLUMN IF NOT EXISTS "currency" VARCHAR(3)');
+      await run(`UPDATE "commission_payments" AS p SET "currency" = (SELECT MIN(c."currency") FROM "commissions" AS c WHERE c."paymentId" = p."id")
+        WHERE p."currency" IS NULL`);
+      await run(`UPDATE "commission_payments" SET "currency" = 'USD' WHERE "currency" IS NULL`);
+      await run('ALTER TABLE "commission_payments" ALTER COLUMN "currency" SET NOT NULL');
+      await currencyCheck('commission_payments');
+
+      await run('ALTER TABLE "expenses" ADD COLUMN IF NOT EXISTS "currency" VARCHAR(3)');
+      await run(`UPDATE "expenses" SET "currency" = 'USD' WHERE "currency" IS NULL`);
+      await run('ALTER TABLE "expenses" ALTER COLUMN "currency" SET NOT NULL');
+      await currencyCheck('expenses');
+
+      await run(`ALTER TABLE "services" ADD COLUMN IF NOT EXISTS "audience" VARCHAR(10) NOT NULL DEFAULT 'unisex'`);
+      await run('ALTER TABLE "services" ADD COLUMN IF NOT EXISTS "womenPrice" DECIMAL(10, 2)');
+      await run('ALTER TABLE "services" ADD COLUMN IF NOT EXISTS "menPrice" DECIMAL(10, 2)');
+      await run(`ALTER TABLE "services" ADD CONSTRAINT "services_audience_check" CHECK ("audience" IN ('women', 'men', 'unisex'))`);
+      await run('ALTER TABLE "services" ADD CONSTRAINT "services_audience_prices_check" CHECK ("womenPrice" >= 0 AND "menPrice" >= 0)');
+      await run('ALTER TABLE "sale_items" ADD COLUMN IF NOT EXISTS "audience" VARCHAR(10)');
+      await run(`ALTER TABLE "sale_items" ADD CONSTRAINT "sale_items_audience_check" CHECK ("audience" IN ('women', 'men'))`);
+
+      await run(`ALTER TABLE "staff" ADD COLUMN IF NOT EXISTS "payType" VARCHAR(20) NOT NULL DEFAULT 'commission'`);
+      await run('ALTER TABLE "staff" ADD COLUMN IF NOT EXISTS "monthlySalary" DECIMAL(12, 2) NOT NULL DEFAULT 0');
+      await run(`ALTER TABLE "staff" ADD CONSTRAINT "staff_pay_type_check" CHECK ("payType" IN ('commission', 'fixed'))`);
+      await run('ALTER TABLE "staff" ADD CONSTRAINT "staff_monthly_salary_check" CHECK ("monthlySalary" >= 0)');
+
+      await run('ALTER TABLE "sales" ADD COLUMN IF NOT EXISTS "baseCurrency" VARCHAR(3)');
+      await run('ALTER TABLE "sales" ADD COLUMN IF NOT EXISTS "baseAmount" DECIMAL(14, 2)');
+      await run('ALTER TABLE "clients" ALTER COLUMN "totalSpent" TYPE DECIMAL(14, 2)');
+      await run('ALTER TABLE "report_archives" ADD COLUMN IF NOT EXISTS "breakdown" JSONB');
+    },
+  },
+  {
+    // Traceable operations, for receipts, debts, the cash journal, team pay and the daily history:
+    // - salon_settings: business details printed on receipts, remuneration period;
+    // - sales: receipt number (sequence, numbered in order of creation), author, cancellation details;
+    // - sale_items: name and purchase cost at the time of the sale;
+    // - sale_payments: every amount received for a sale (existing sales: their initial payment);
+    // - staff_payouts: advances and payments to the team (existing commission payments are copied);
+    // - commissions and expenses are cancelled instead of deleted; cash_adjustments and cash_counts
+    //   record the other cash movements and the drawer counts;
+    // - appointments keep the price of their service at booking time.
+    name: '007-operations-history',
+    up: async ({ sequelize, transaction }) => {
+      const run = (sql: string) => sequelize.query(sql, { transaction });
+      const check = (table: string, name: string, condition: string) =>
+        run(`ALTER TABLE ${quote(table)} ADD CONSTRAINT ${quote(name)} CHECK (${condition})`);
+
+      await run(`ALTER TABLE "salon_settings" ADD COLUMN IF NOT EXISTS "businessName" VARCHAR(120) NOT NULL DEFAULT 'Stander Beauty'`);
+      await run('ALTER TABLE "salon_settings" ADD COLUMN IF NOT EXISTS "businessEmail" VARCHAR(254)');
+      await run('ALTER TABLE "salon_settings" ADD COLUMN IF NOT EXISTS "businessPhone" VARCHAR(40)');
+      await run('ALTER TABLE "salon_settings" ADD COLUMN IF NOT EXISTS "taxId" VARCHAR(60)');
+      await run('ALTER TABLE "salon_settings" ADD COLUMN IF NOT EXISTS "businessAddress" VARCHAR(255)');
+      await run(`ALTER TABLE "salon_settings" ADD COLUMN IF NOT EXISTS "payPeriod" VARCHAR(10) NOT NULL DEFAULT 'monthly'`);
+      await check('salon_settings', 'salon_settings_pay_period_check', `"payPeriod" IN ('weekly', 'monthly')`);
+
+      await run('ALTER TABLE "products" ADD COLUMN IF NOT EXISTS "description" TEXT');
+
+      await run('CREATE SEQUENCE IF NOT EXISTS "sales_receipt_number_seq"');
+      await run('ALTER TABLE "sales" ADD COLUMN IF NOT EXISTS "receiptNumber" BIGINT');
+      await run(`UPDATE "sales" AS s SET "receiptNumber" = n.rank FROM (
+        SELECT "id", ROW_NUMBER() OVER (ORDER BY "createdAt", "id") AS rank FROM "sales") AS n
+        WHERE s."id" = n."id" AND s."receiptNumber" IS NULL`);
+      await run(`SELECT setval('sales_receipt_number_seq', GREATEST((SELECT COALESCE(MAX("receiptNumber"), 0) FROM "sales"), 1),
+        (SELECT COUNT(*) > 0 FROM "sales"))`);
+      await run(`ALTER TABLE "sales" ALTER COLUMN "receiptNumber" SET DEFAULT nextval('sales_receipt_number_seq')`);
+      await run('ALTER TABLE "sales" ALTER COLUMN "receiptNumber" SET NOT NULL');
+      await run('ALTER SEQUENCE "sales_receipt_number_seq" OWNED BY "sales"."receiptNumber"');
+      await run('CREATE UNIQUE INDEX IF NOT EXISTS "sales_receipt_number_unique" ON "sales" ("receiptNumber")');
+      await run('ALTER TABLE "sales" ADD COLUMN IF NOT EXISTS "createdByUserId" UUID');
+      await run('ALTER TABLE "sales" ADD COLUMN IF NOT EXISTS "cancelledAt" TIMESTAMPTZ');
+      await run('ALTER TABLE "sales" ADD COLUMN IF NOT EXISTS "cancelledByUserId" UUID');
+      await run('ALTER TABLE "sales" ADD COLUMN IF NOT EXISTS "cancelReason" VARCHAR(255)');
+      // Sales cancelled before: their cancellation time is their last update.
+      await run(`UPDATE "sales" SET "cancelledAt" = "updatedAt" WHERE "status" = 'refunded' AND "cancelledAt" IS NULL`);
+
+      await run('ALTER TABLE "sale_items" ADD COLUMN IF NOT EXISTS "itemName" VARCHAR(255)');
+      await run('ALTER TABLE "sale_items" ADD COLUMN IF NOT EXISTS "unitCost" DECIMAL(10, 2)');
+      await run(`UPDATE "sale_items" AS i SET "itemName" = s."name" FROM "services" AS s
+        WHERE i."type" = 'service' AND i."itemId" = s."id" AND i."itemName" IS NULL`);
+      await run(`UPDATE "sale_items" AS i SET "itemName" = p."name" FROM "products" AS p
+        WHERE i."type" = 'product' AND i."itemId" = p."id" AND i."itemName" IS NULL`);
+
+      await run(`CREATE TABLE IF NOT EXISTS "sale_payments" (
+        "id" UUID PRIMARY KEY,
+        "saleId" UUID NOT NULL REFERENCES "sales" ("id") ON UPDATE CASCADE ON DELETE RESTRICT,
+        "kind" VARCHAR(10) NOT NULL CHECK ("kind" IN ('sale', 'debt')),
+        "amount" DECIMAL(14, 2) NOT NULL CHECK ("amount" > 0),
+        "currency" VARCHAR(3) NOT NULL CHECK ("currency" IN ('USD', 'CDF')),
+        "paymentMethod" VARCHAR(20) NOT NULL,
+        "idempotencyKey" VARCHAR(100) UNIQUE,
+        "userId" UUID,
+        "createdAt" TIMESTAMPTZ NOT NULL,
+        "updatedAt" TIMESTAMPTZ NOT NULL
+      )`);
+      await run('CREATE INDEX IF NOT EXISTS "sale_payments_sale_id" ON "sale_payments" ("saleId")');
+      await run('CREATE INDEX IF NOT EXISTS "sale_payments_created_at" ON "sale_payments" ("createdAt")');
+      // Existing sales: the amount paid at the till. Sales without a known currency cannot enter
+      // a per-currency cash journal and are left out of it.
+      await run(`INSERT INTO "sale_payments" ("id", "saleId", "kind", "amount", "currency", "paymentMethod", "createdAt", "updatedAt")
+        SELECT gen_random_uuid(), s."id", 'sale', s."amountPaid", s."currency", s."paymentMethod"::text, s."saleDate", s."saleDate"
+        FROM "sales" AS s
+        WHERE s."amountPaid" > 0 AND s."currency" IN ('USD', 'CDF')
+          AND NOT EXISTS (SELECT 1 FROM "sale_payments" AS p WHERE p."saleId" = s."id")`);
+
+      await run(`CREATE TABLE IF NOT EXISTS "staff_payouts" (
+        "id" UUID PRIMARY KEY,
+        "staffId" UUID NOT NULL REFERENCES "staff" ("id") ON UPDATE CASCADE ON DELETE RESTRICT,
+        "kind" VARCHAR(10) NOT NULL CHECK ("kind" IN ('advance', 'payment')),
+        "amount" DECIMAL(14, 2) NOT NULL CHECK ("amount" > 0),
+        "currency" VARCHAR(3) NOT NULL CHECK ("currency" IN ('USD', 'CDF')),
+        "paymentMethod" VARCHAR(20) NOT NULL DEFAULT 'cash',
+        "note" VARCHAR(255),
+        "idempotencyKey" VARCHAR(100) NOT NULL UNIQUE,
+        "paidByUserId" UUID,
+        "createdAt" TIMESTAMPTZ NOT NULL,
+        "updatedAt" TIMESTAMPTZ NOT NULL
+      )`);
+      await run('CREATE INDEX IF NOT EXISTS "staff_payouts_staff_id" ON "staff_payouts" ("staffId", "currency")');
+      await run(`INSERT INTO "staff_payouts" ("id", "staffId", "kind", "amount", "currency", "note", "idempotencyKey", "paidByUserId", "createdAt", "updatedAt")
+        SELECT p."id", p."staffId", 'payment', p."amount", p."currency", 'Règlement de commissions', p."idempotencyKey", p."paidByUserId", p."createdAt", p."updatedAt"
+        FROM "commission_payments" AS p
+        WHERE p."amount" > 0 AND NOT EXISTS (SELECT 1 FROM "staff_payouts" AS s WHERE s."idempotencyKey" = p."idempotencyKey")`);
+
+      await run('ALTER TABLE "commissions" ADD COLUMN IF NOT EXISTS "cancelledAt" TIMESTAMPTZ');
+
+      await run('ALTER TABLE "expenses" ADD COLUMN IF NOT EXISTS "createdByUserId" UUID');
+      await run('ALTER TABLE "expenses" ADD COLUMN IF NOT EXISTS "cancelledAt" TIMESTAMPTZ');
+      await run('ALTER TABLE "expenses" ADD COLUMN IF NOT EXISTS "cancelledByUserId" UUID');
+      await run('ALTER TABLE "expenses" ADD COLUMN IF NOT EXISTS "cancelReason" VARCHAR(255)');
+
+      await run(`CREATE TABLE IF NOT EXISTS "cash_adjustments" (
+        "id" UUID PRIMARY KEY,
+        "direction" VARCHAR(3) NOT NULL CHECK ("direction" IN ('in', 'out')),
+        "amount" DECIMAL(14, 2) NOT NULL CHECK ("amount" > 0),
+        "currency" VARCHAR(3) NOT NULL CHECK ("currency" IN ('USD', 'CDF')),
+        "paymentMethod" VARCHAR(20) NOT NULL DEFAULT 'cash',
+        "reason" VARCHAR(255) NOT NULL,
+        "userId" UUID,
+        "createdAt" TIMESTAMPTZ NOT NULL,
+        "updatedAt" TIMESTAMPTZ NOT NULL
+      )`);
+      await run(`CREATE TABLE IF NOT EXISTS "cash_counts" (
+        "id" UUID PRIMARY KEY,
+        "day" DATE NOT NULL,
+        "currency" VARCHAR(3) NOT NULL CHECK ("currency" IN ('USD', 'CDF')),
+        "expectedAmount" DECIMAL(14, 2) NOT NULL,
+        "countedAmount" DECIMAL(14, 2) NOT NULL CHECK ("countedAmount" >= 0),
+        "note" VARCHAR(255),
+        "userId" UUID,
+        "createdAt" TIMESTAMPTZ NOT NULL,
+        "updatedAt" TIMESTAMPTZ NOT NULL
+      )`);
+
+      await run('ALTER TABLE "appointments" ADD COLUMN IF NOT EXISTS "price" DECIMAL(10, 2)');
+      await run('ALTER TABLE "appointments" ADD COLUMN IF NOT EXISTS "currency" VARCHAR(3)');
+      await run(`UPDATE "appointments" AS a SET "price" = s."price", "currency" = (SELECT "baseCurrency" FROM "salon_settings" WHERE "id" = 1)
+        FROM "services" AS s WHERE a."serviceId" = s."id" AND a."price" IS NULL`);
+    },
+  },
+  {
+    // - sale_items.catalogUnitPrice: the catalogue price of a service line whose price the cashier
+    //   changed at the till (null when the catalogue price was charged);
+    // - products.imageUrl becomes TEXT: it may hold a photo taken or chosen on the device.
+    name: '008-till-prices-and-product-photos',
+    up: async ({ sequelize, transaction }) => {
+      await sequelize.query('ALTER TABLE "sale_items" ADD COLUMN IF NOT EXISTS "catalogUnitPrice" DECIMAL(10, 2)', { transaction });
+      await sequelize.query('ALTER TABLE "products" ALTER COLUMN "imageUrl" TYPE TEXT', { transaction });
+    },
+  },
 ];

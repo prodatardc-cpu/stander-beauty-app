@@ -1,10 +1,10 @@
-import { sequelize } from '../config/database';
+import { connectDB, describeDatabaseError, sequelize } from '../config/database';
 import { listPendingMigrations, runMigrations } from '../db/migrator';
 
 // Usage: npm run db:migrate            -> applies pending migrations
 //        npm run db:migrate -- --status -> lists pending migrations without applying them
 const main = async () => {
-  await sequelize.authenticate();
+  await connectDB();
   if (process.argv.includes('--status')) {
     const pending = await listPendingMigrations();
     console.log(pending.length ? `Pending migrations: ${pending.join(', ')}` : 'Database schema is up to date.');
@@ -16,7 +16,7 @@ const main = async () => {
 
 main()
   .catch((error: unknown) => {
-    console.error('Migration failed:', error instanceof Error ? error.message : error);
+    console.error('Migration failed:', describeDatabaseError(error));
     process.exitCode = 1;
   })
   .finally(() => sequelize.close());

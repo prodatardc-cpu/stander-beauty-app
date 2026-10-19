@@ -40,6 +40,7 @@ describe('configuration parsing', () => {
     assert.throws(() => checkConfiguration({ ...production, JWT_SECRET: 'short' }), /JWT_SECRET/);
     assert.throws(() => checkConfiguration({ ...production, JWT_SECRET: undefined }), /JWT_SECRET/);
     assert.throws(() => checkConfiguration({ ...production, DB_PASSWORD: 'change-me' }), /DB_PASSWORD/);
+    assert.throws(() => checkConfiguration({ ...production, NODE_ENV: 'development', DB_PASSWORD: undefined }), /DB_PASSWORD/);
     assert.throws(() => checkConfiguration({ ...production, JWT_EXPIRE: 'forever' }), /JWT_EXPIRE/);
     assert.throws(() => checkConfiguration({ ...production, CORS_ORIGIN: undefined }), /CORS_ORIGIN/);
     assert.match(checkConfiguration({ ...production, INITIAL_ADMIN_PASSWORD: 'x' })[0], /INITIAL_ADMIN_PASSWORD/);

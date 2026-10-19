@@ -13,6 +13,7 @@ export class Product extends Model {
   declare status: 'active' | 'inactive';
   declare category: string;
   declare imageUrl?: string;
+  declare description: string | null;
 }
 
 Product.init(
@@ -61,8 +62,13 @@ Product.init(
       type: DataTypes.STRING,
       allowNull: false,
     },
+    // A web address or a compressed JPEG photo (data URL).
     imageUrl: {
-      type: DataTypes.STRING,
+      type: DataTypes.TEXT,
+      allowNull: true,
+    },
+    description: {
+      type: DataTypes.TEXT,
       allowNull: true,
     },
   },

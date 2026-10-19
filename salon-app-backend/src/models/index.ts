@@ -12,6 +12,11 @@ import { StockMovement } from './StockMovement';
 import { Expense } from './Expense';
 import { ReportArchive } from './ReportArchive';
 import { CommissionPayment } from './CommissionPayment';
+import { SalonSettings } from './SalonSettings';
+import { SalePayment } from './SalePayment';
+import { StaffPayout } from './StaffPayout';
+import { CashAdjustment } from './CashAdjustment';
+import { CashCount } from './CashCount';
 
 // Relations
 // Financial and attendance history is protected: deleting a parent that still has history fails
@@ -21,6 +26,10 @@ const keepHistory = { onDelete: 'RESTRICT' } as const;
 Sale.hasMany(SaleItem, { foreignKey: 'saleId', as: 'items', ...keepHistory });
 SaleItem.belongsTo(Sale, { foreignKey: 'saleId', ...keepHistory });
 Commission.belongsTo(SaleItem, { foreignKey: 'saleItemId', ...keepHistory });
+Sale.hasMany(SalePayment, { foreignKey: 'saleId', as: 'payments', ...keepHistory });
+SalePayment.belongsTo(Sale, { foreignKey: 'saleId', ...keepHistory });
+Staff.hasMany(StaffPayout, { foreignKey: 'staffId', as: 'payouts', ...keepHistory });
+StaffPayout.belongsTo(Staff, { foreignKey: 'staffId', ...keepHistory });
 
 Client.hasMany(Sale, { foreignKey: 'clientId', as: 'sales', ...keepHistory });
 Sale.belongsTo(Client, { foreignKey: 'clientId', ...keepHistory });
@@ -43,4 +52,5 @@ Service.hasMany(Appointment, { foreignKey: 'serviceId' });
 Product.hasMany(StockMovement, { foreignKey: 'productId', as: 'movements' });
 StockMovement.belongsTo(Product, { foreignKey: 'productId' });
 
-export { User, Client, Staff, Attendance, Service, Product, Sale, SaleItem, Commission, CommissionPayment, Appointment, StockMovement, Expense, ReportArchive };
+export { User, Client, Staff, Attendance, Service, Product, Sale, SaleItem, Commission, CommissionPayment, Appointment, StockMovement, Expense, ReportArchive, SalonSettings,
+  SalePayment, StaffPayout, CashAdjustment, CashCount };

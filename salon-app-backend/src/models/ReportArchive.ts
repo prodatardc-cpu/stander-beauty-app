@@ -18,6 +18,7 @@ export class ReportArchive extends Model {
   declare transactionCount: number;
   declare expenseCount: number;
   declare closedAt: Date;
+  declare breakdown: Record<string, unknown> | null;
 }
 
 ReportArchive.init(
@@ -38,6 +39,8 @@ ReportArchive.init(
     transactionCount: { type: DataTypes.INTEGER, allowNull: false },
     expenseCount: { type: DataTypes.INTEGER, allowNull: false },
     closedAt: { type: DataTypes.DATE, allowNull: false, defaultValue: DataTypes.NOW },
+    // Figures per currency (USD, CDF). Archives made before it existed only have the mixed totals above.
+    breakdown: { type: DataTypes.JSONB, allowNull: true },
   },
   {
     sequelize,

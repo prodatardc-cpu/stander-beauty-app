@@ -3,6 +3,7 @@
 @theme {
 	--font-sans: "DM Sans", ui-sans-serif, system-ui, sans-serif;
 	--font-display: "Cormorant Garamond", Georgia, serif;
+	--font-century: "Century Gothic", CenturyGothic, AppleGothic, "URW Gothic", sans-serif;
 	--color-gray-50: #242024;
 	--color-gray-100: #111111;
 	--color-gray-200: #302831;
@@ -346,6 +347,86 @@
 	color: #FFD700;
 	font-size: 14px;
 	font-weight: 700;
+}
+
+.studio-search {
+	position: relative;
+	margin: -14px 8px 26px;
+}
+
+.studio-search input {
+	width: 100%;
+	padding: 8px 12px;
+	border: 1px solid var(--sidebar-border);
+	border-radius: 999px;
+	color: var(--sidebar-text);
+	background: transparent;
+	font-size: 13px;
+}
+
+.studio-search input::placeholder {
+	color: var(--sidebar-muted);
+}
+
+.studio-search input:focus {
+	border-color: var(--color-brand-gold);
+	outline: none;
+}
+
+.studio-search-results {
+	position: absolute;
+	z-index: 20;
+	top: calc(100% + 6px);
+	right: 0;
+	left: 0;
+	display: flex;
+	flex-direction: column;
+	padding: 6px;
+	border: 1px solid var(--sidebar-border);
+	border-radius: 12px;
+	background: var(--surface-raised);
+	box-shadow: 0 10px 30px var(--surface-shadow);
+}
+
+.studio-search-results {
+	max-height: min(420px, 70vh);
+	overflow-y: auto;
+}
+
+.studio-search-results button {
+	display: flex;
+	flex-direction: column;
+	gap: 1px;
+	padding: 7px 10px;
+	border-radius: 8px;
+	color: var(--sidebar-text);
+	font-size: 13px;
+	text-align: left;
+}
+
+.studio-search-results button small {
+	color: var(--sidebar-muted);
+	font-size: 11px;
+}
+
+.studio-search-results button.is-active,
+.studio-search-results button:focus-visible {
+	background: var(--surface-muted);
+}
+
+.studio-search-group {
+	padding: 8px 10px 2px;
+	color: var(--color-brand-gold);
+	font-size: 10px;
+	font-weight: 700;
+	letter-spacing: 0.06em;
+	text-transform: uppercase;
+}
+
+.studio-search-empty {
+	padding: 8px 10px;
+	color: var(--sidebar-muted);
+	font-size: 13px;
 }
 
 .studio-navigation {
@@ -1757,4 +1838,701 @@
 .modal-header h2,
 .workspace-main h1 {
 	font-variant-numeric: lining-nums tabular-nums;
+}
+
+/* ---------- Financial colour code ----------
+   Profit in green, expenses in amber, sold-out products and money going out in red.
+   Tokens come from the theme, so both light and dark modes stay readable. */
+
+.money {
+	white-space: nowrap;
+	font-variant-numeric: tabular-nums;
+}
+
+.money-stack {
+	display: inline-flex;
+	flex-direction: column;
+	align-items: inherit;
+	gap: 2px;
+}
+
+td.num .money-stack {
+	align-items: flex-end;
+}
+
+.tone-profit {
+	color: var(--color-green-700);
+	font-weight: 600;
+}
+
+.tone-expense {
+	color: var(--color-amber-700);
+	font-weight: 600;
+}
+
+.tone-danger {
+	color: var(--color-red-700);
+	font-weight: 600;
+}
+
+.tone-muted {
+	color: var(--color-gray-500);
+	text-decoration: line-through;
+}
+
+.kpi-profit .kpi-value {
+	color: var(--color-green-700);
+}
+
+.kpi-expense .kpi-value {
+	color: var(--color-amber-700);
+}
+
+.kpi-danger .kpi-value {
+	color: var(--color-red-700);
+}
+
+.kpi-profit {
+	border-left: 3px solid var(--color-green-700);
+}
+
+.kpi-expense {
+	border-left: 3px solid var(--color-amber-700);
+}
+
+.kpi-danger {
+	border-left: 3px solid var(--color-red-700);
+}
+
+/* Compact KPI cards (till, staff page, history). */
+.kpi-compact .kpi-card {
+	min-height: 0;
+	padding: 12px 14px;
+}
+
+.kpi-compact .kpi-value {
+	margin-top: 8px;
+	font-size: 22px;
+}
+
+.kpi-compact .kpi-value .money-stack {
+	font-size: 18px;
+}
+
+.kpi-compact .kpi-hint {
+	margin-top: 6px;
+}
+
+/* ---------- Navigation ---------- */
+
+.back-button {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	min-height: 32px;
+	margin: 0 0 6px -6px;
+	padding: 4px 8px;
+	border: 0;
+	border-radius: 4px;
+	color: var(--color-gray-600);
+	background: transparent;
+	font-size: 13px;
+	font-weight: 600;
+}
+
+.back-button svg {
+	width: 16px;
+	height: 16px;
+}
+
+.back-button:hover:not(:disabled) {
+	transform: none;
+	color: var(--color-gray-900);
+	background: var(--color-gray-200);
+}
+
+/* ---------- Tables ---------- */
+
+.compact-table th,
+.compact-table td {
+	padding: 8px 10px;
+	font-size: 13px;
+	vertical-align: top;
+}
+
+.compact-table .cell-sub {
+	display: block;
+}
+
+.data-table tr.is-cancelled td,
+.list-row.is-cancelled {
+	color: var(--color-gray-500);
+}
+
+.data-table tr.is-cancelled .cell-title {
+	text-decoration: line-through;
+}
+
+.figures-table td:first-child {
+	min-width: 220px;
+}
+
+.figures-table tr.is-strong td {
+	font-weight: 700;
+	border-top: 1px solid var(--color-gray-300);
+}
+
+.report-section {
+	padding: 16px;
+	border: 1px solid var(--color-gray-200);
+	border-radius: 4px;
+	background: var(--surface-raised);
+}
+
+.report-section .panel-header {
+	margin-bottom: 10px;
+}
+
+.report-grid {
+	display: grid;
+	gap: 16px;
+	grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr));
+}
+
+.history-table td {
+	min-width: 96px;
+}
+
+.history-table td:first-child .badge {
+	display: inline-block;
+	margin-top: 4px;
+}
+
+/* ---------- Till (compact) ---------- */
+
+.till .page-header {
+	padding-bottom: 12px;
+}
+
+.till-grid {
+	display: grid;
+	gap: 20px;
+	grid-template-columns: minmax(0, 1.3fr) minmax(300px, 0.7fr);
+	align-items: start;
+}
+
+.till-panel {
+	padding: 16px;
+}
+
+.till-panel .panel-header {
+	margin-bottom: 10px;
+}
+
+.till-fields {
+	display: grid;
+	gap: 10px;
+	grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+	margin-bottom: 10px;
+}
+
+.till-fields .field input,
+.till-fields .field select {
+	padding: 7px 10px;
+}
+
+.till-picker {
+	margin: 4px 0 10px;
+}
+
+.till-picker select {
+	flex: 1 1 220px;
+	min-width: 0;
+}
+
+.till-picker input {
+	width: 72px;
+}
+
+.till-lines {
+	margin-bottom: 12px;
+	border-top: 1px solid var(--color-gray-200);
+	border-bottom: 1px solid var(--color-gray-200);
+}
+
+.till-lines .empty-state {
+	padding: 20px 12px;
+}
+
+.till-line {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) auto 96px;
+	align-items: center;
+	gap: 10px;
+	padding: 8px 0;
+	border-bottom: 1px solid var(--color-gray-200);
+}
+
+.till-line:last-child {
+	border-bottom: 0;
+}
+
+.till-qty {
+	display: inline-flex;
+	align-items: center;
+	border: 1px solid var(--color-gray-300);
+	border-radius: 4px;
+}
+
+.till-qty button {
+	min-width: 32px;
+	min-height: 32px;
+	padding: 0;
+	border: 0;
+	color: var(--color-gray-800);
+	background: transparent;
+	font-size: 16px;
+}
+
+.till-qty span {
+	min-width: 28px;
+	text-align: center;
+	font-weight: 600;
+}
+
+.till-amount {
+	text-align: right;
+	font-weight: 600;
+	font-variant-numeric: tabular-nums;
+}
+
+.till-total {
+	display: flex;
+	align-items: baseline;
+	justify-content: space-between;
+	margin: 10px 0 12px;
+	font-size: 14px;
+}
+
+.till-total strong {
+	font-family: var(--font-display);
+	font-size: 28px;
+	font-variant-numeric: lining-nums tabular-nums;
+}
+
+.till-sale {
+	padding: 9px 0;
+}
+
+.till-alert,
+.till-last {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 8px;
+	margin: 0;
+	padding: 9px 12px;
+	border: 1px solid var(--color-gray-200);
+	border-radius: 4px;
+	background: var(--surface-raised);
+	font-size: 13px;
+}
+
+/* ---------- Shop window ---------- */
+
+.product-grid {
+	display: grid;
+	gap: 14px;
+	grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+}
+
+.product-card {
+	display: flex;
+	flex-direction: column;
+	overflow: hidden;
+	border: 1px solid var(--color-gray-200);
+	border-radius: 6px;
+	background: var(--surface-raised);
+}
+
+.product-card.is-soldout .product-media {
+	opacity: 0.55;
+}
+
+.product-media {
+	display: grid;
+	aspect-ratio: 4 / 3;
+	place-items: center;
+	background: var(--surface-muted);
+}
+
+.product-media img {
+	width: 100%;
+	height: 100%;
+	object-fit: cover;
+}
+
+/* No product photo: the salon logo matching the theme (as in the sidebar). */
+.product-media .product-placeholder {
+	display: grid;
+	width: 40%;
+	aspect-ratio: 1;
+	opacity: 0.6;
+}
+
+.product-body {
+	display: flex;
+	flex: 1;
+	flex-direction: column;
+	gap: 6px;
+	padding: 12px 14px 14px;
+}
+
+.product-category {
+	margin: 0;
+	color: var(--color-gray-500);
+	font-size: 11px;
+	font-weight: 600;
+	letter-spacing: 0.04em;
+	text-transform: uppercase;
+}
+
+.workspace-main .product-name {
+	margin: 0;
+	font-size: 20px;
+	line-height: 1.2;
+}
+
+.product-description {
+	display: -webkit-box;
+	margin: 0;
+	overflow: hidden;
+	color: var(--color-gray-600);
+	font-size: 13px;
+	-webkit-line-clamp: 3;
+	-webkit-box-orient: vertical;
+}
+
+.product-meta {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+	margin-top: auto;
+	padding-top: 6px;
+}
+
+.product-price {
+	color: var(--color-gray-800);
+	font-size: 14px;
+	font-weight: 600;
+}
+
+.product-price small {
+	color: var(--color-gray-500);
+	font-size: 11px;
+	font-weight: 500;
+}
+
+/* ---------- Team pay ---------- */
+
+.pay-summary {
+	display: grid;
+	margin: 0;
+	border: 1px solid var(--color-gray-200);
+	border-radius: 4px;
+}
+
+.pay-summary > div {
+	display: flex;
+	justify-content: space-between;
+	gap: 12px;
+	padding: 8px 12px;
+	border-bottom: 1px solid var(--color-gray-200);
+	font-size: 13px;
+}
+
+.pay-summary > div:last-child {
+	border-bottom: 0;
+}
+
+.pay-summary dt {
+	color: var(--color-gray-600);
+}
+
+.pay-summary dd {
+	margin: 0;
+	font-weight: 600;
+	font-variant-numeric: tabular-nums;
+}
+
+.pay-summary .pay-due {
+	background: var(--surface-muted);
+	font-size: 15px;
+}
+
+/* ---------- Receipt ---------- */
+
+.receipt-logo {
+	display: block;
+	width: 56px;
+	height: 56px;
+	margin: 0 auto 6px;
+	object-fit: contain;
+}
+
+.receipt-head span {
+	display: block;
+	color: var(--color-gray-600);
+	font-size: 12px;
+	line-height: 1.5;
+}
+
+.receipt-cancelled {
+	margin: 10px 0 0;
+	padding: 6px 8px;
+	border: 1px solid var(--color-red-700);
+	color: var(--color-red-700);
+	font-weight: 700;
+	text-align: center;
+	text-transform: uppercase;
+}
+
+.receipt-meta {
+	display: grid;
+	gap: 2px;
+	margin: 12px 0;
+	font-size: 12px;
+}
+
+.receipt-meta > div {
+	display: flex;
+	justify-content: space-between;
+	gap: 12px;
+}
+
+.receipt-meta dt {
+	color: var(--color-gray-500);
+}
+
+.receipt-meta dd {
+	margin: 0;
+	text-align: right;
+}
+
+.receipt-lines {
+	width: 100%;
+	border-collapse: collapse;
+	font-size: 12px;
+}
+
+.receipt-lines th {
+	padding: 6px 0;
+	border-top: 1px dashed var(--color-gray-300);
+	border-bottom: 1px dashed var(--color-gray-300);
+	color: var(--color-gray-500);
+	font-weight: 600;
+	text-align: left;
+}
+
+.receipt-lines td {
+	padding: 5px 0;
+	vertical-align: top;
+}
+
+.receipt-lines .num {
+	padding-left: 8px;
+	text-align: right;
+	white-space: nowrap;
+}
+
+.receipt-totals {
+	margin-top: 6px;
+}
+
+.receipt-due {
+	font-weight: 700;
+}
+
+@media print {
+	.receipt,
+	.receipt * {
+		color: #000 !important;
+	}
+
+	.receipt-head span,
+	.receipt-meta dt,
+	.receipt-lines th {
+		color: #333 !important;
+	}
+
+	.receipt-lines th,
+	.receipt-head,
+	.receipt-total {
+		border-color: #000 !important;
+	}
+}
+
+/* ---------- Small screens ---------- */
+
+@media (max-width: 1100px) {
+	.till-grid {
+		grid-template-columns: minmax(0, 1fr);
+	}
+}
+
+@media (max-width: 760px) {
+	.kpi-grid.kpi-grid-4.kpi-compact {
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+	}
+
+	.till-line {
+		grid-template-columns: minmax(0, 1fr) auto;
+	}
+
+	.till-amount {
+		grid-column: 1 / -1;
+		text-align: left;
+	}
+
+	.toolbar .field {
+		flex: 1 1 140px;
+	}
+
+	.figures-table td:first-child {
+		min-width: 160px;
+	}
+}
+
+@media (max-width: 340px) {
+	.kpi-grid.kpi-grid-4.kpi-compact {
+		grid-template-columns: minmax(0, 1fr);
+	}
+}
+
+@media (max-width: 420px) {
+
+	.product-grid {
+		grid-template-columns: minmax(0, 1fr);
+	}
+}
+
+/* Tab rows scroll sideways on narrow screens instead of widening the page. */
+.tabs {
+	max-width: 100%;
+	overflow-x: auto;
+	scrollbar-width: thin;
+}
+
+.tab {
+	flex: 0 0 auto;
+	white-space: nowrap;
+}
+
+@media (max-width: 760px) {
+	.figures-table td:first-child {
+		min-width: 130px;
+	}
+
+	.report-section {
+		padding: 12px;
+	}
+}
+
+/* Out-of-stock alert, on every page. */
+.workspace-main .stock-alert[role='alert'] {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 6px 10px;
+	margin-bottom: 16px;
+	padding: 10px 14px;
+	border: 1px solid var(--color-red-700);
+	border-left-width: 4px;
+	border-radius: 4px;
+	color: var(--color-red-700);
+	background: var(--color-red-50);
+	font-size: 14px;
+}
+
+.stock-alert-link {
+	margin-left: auto;
+	color: inherit;
+	font-weight: 700;
+	text-decoration: underline;
+}
+
+/* Product photo button over the shop card picture. */
+.product-media {
+	position: relative;
+}
+
+.product-photo-button {
+	position: absolute;
+	right: 8px;
+	bottom: 8px;
+	padding: 4px 10px;
+	border-radius: 999px;
+	color: #fff;
+	background: rgb(0 0 0 / 60%);
+	font-size: 12px;
+	font-weight: 600;
+	cursor: pointer;
+}
+
+.product-photo-button:hover,
+.product-photo-button:focus-within {
+	background: rgb(0 0 0 / 80%);
+}
+
+.product-photo-field {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 12px;
+}
+
+.product-photo-field .product-media {
+	width: 160px;
+	border-radius: 4px;
+	overflow: hidden;
+}
+
+/* Till pickers: a list of services with an editable price, a list of products with a quantity. */
+.till-picker-group {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) 120px auto;
+	align-items: end;
+	gap: 10px;
+	margin-bottom: 10px;
+}
+
+.till-picker-group .field select,
+.till-picker-group .field input {
+	padding: 7px 10px;
+}
+
+.till-line-price {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 6px;
+	margin-top: 4px;
+}
+
+.till-line-price input {
+	width: 96px;
+	padding: 4px 8px;
+	font-size: 13px;
+}
+
+@media (max-width: 520px) {
+	.till-picker-group {
+		grid-template-columns: minmax(0, 1fr) 96px;
+	}
+
+	.till-picker-group .btn {
+		grid-column: 1 / -1;
+	}
 }

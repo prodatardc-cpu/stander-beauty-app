@@ -39,3 +39,10 @@ export const isSameLocalDay = (value: string | Date, reference = new Date()) =>
 
 export const initials = (name: string) =>
   name.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]?.toUpperCase()).join('') || '?';
+
+// Receipt numbers are printed on six digits: N° 000042.
+export const formatReceiptNumber = (value: number | string | undefined) => `N° ${String(value ?? '').padStart(6, '0')}`;
+
+// "Mois du 1 oct. 2026 au 31 oct. 2026": the remuneration period of a team member.
+export const periodLabel = ({ period }: { period: { kind: 'weekly' | 'monthly'; start: string; end: string } }) =>
+  `${period.kind === 'weekly' ? 'Semaine' : 'Mois'} du ${formatDate(period.start)} au ${formatDate(period.end)}`;

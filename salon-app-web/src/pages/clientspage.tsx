@@ -1,4 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react';
+import { useSearchTerm } from '../hooks/useSearchTerm';
 import QRCode from 'qrcode';
 import type { Client, Sale } from '../types';
 import { apiClient, getApiError } from '../services/api';
@@ -18,7 +19,7 @@ export const ClientsPage = () => {
   const isAdmin = useIsAdmin();
   const { notify, confirm } = useFeedback();
   const [clients, setClients] = useState<Client[]>([]);
-  const [query, setQuery] = useState('');
+  const [query, setQuery] = useSearchTerm();
   const [debouncedQuery, setDebouncedQuery] = useState('');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);

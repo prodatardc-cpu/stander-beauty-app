@@ -14,6 +14,9 @@ router.post('/', saleController.create);
 router.get('/', saleController.getAll);
 router.get('/client/:clientId', saleController.getByClient);
 router.delete('/reset', cancelSales, saleController.reset);
-router.delete('/:id', cancelSales, saleController.removeById);
+router.get('/:id', saleController.getOne);
+router.post('/:id/payments', saleController.addPayment);
+router.post('/:id/cancel', cancelSales, saleController.cancel);
+router.delete('/:id', cancelSales, saleController.cancel);
 
 export default router;

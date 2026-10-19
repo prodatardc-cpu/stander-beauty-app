@@ -1,6 +1,8 @@
 import type { Request, Response } from 'express';
 import type { AuthRequest } from '../middleware/authMiddleware';
-import { CommissionPaymentError, commissionService } from '../services/commissionServices';
+import { commissionService } from '../services/commissionServices';
+import { PayrollError, recordPayout, summarizePay } from '../services/payrollService';
+import { currencies, isCurrency } from '../utils/money';
 import { isUuid } from '../utils/validators';
 
 const maxPaymentAmount = 1_000_000_000;
@@ -19,6 +21,8 @@ const getDateRange = (req: Request): { startDate?: Date; endDate?: Date } | null
   return { startDate: parsedStart, endDate: parsedEnd };
 };
 
+// Commissions are paid through the team payroll (advances and payments, /payroll): these routes
+// read and write the same records, so there is a single source for what was paid.
 export const commissionController = {
   getByStaff: async (req: Request, res: Response) => {
     try {
@@ -34,44 +38,56 @@ export const commissionController = {
     }
   },
 
+  // Per currency: earned, paid (advances and payments) and remaining.
   getTotalByStaff: async (req: Request, res: Response) => {
     try {
       const { staffId } = req.params;
       if (!isUuid(staffId)) return res.status(400).json({ error: 'Invalid staff ID' });
-      const totals = await commissionService.getStaffCommissionTotals(staffId);
-      res.json(totals);
+      const [pay] = await summarizePay([staffId]);
+      if (!pay) return res.status(404).json({ error: 'Staff member not found' });
+      res.json(Object.fromEntries(currencies.map((currency) => {
+        const amounts = pay.byCurrency[currency];
+        const earned = pay.payType === 'fixed' ? amounts.period.earned : amounts.total.earned;
+        const paid = pay.payType === 'fixed'
+          ? amounts.period.advances + amounts.period.payments
+          : amounts.total.advances + amounts.total.payments;
+        return [currency, { total: earned, paid: Math.round(paid * 100) / 100, remaining: amounts.remaining }];
+      })));
     } catch (error) {
       res.status(500).json({ error: 'Failed to calculate commissions' });
     }
   },
 
-  // Requires an Idempotency-Key header, generated once per payment intent by the client:
-  // retrying with the same key returns the original payment instead of paying twice.
+  // Pays (part of) what is due to a member in one currency. Requires an Idempotency-Key header,
+  // generated once per payment intent by the client: retrying with the same key returns the
+  // original payment instead of paying twice.
   payCommission: async (req: AuthRequest, res: Response) => {
-    const { staffId, amount } = req.body ?? {};
+    const { staffId, amount, currency } = req.body ?? {};
     const paymentAmount = Number(amount);
     const idempotencyKey = req.get('Idempotency-Key');
-    if (!isUuid(staffId) || typeof amount === 'boolean' || !Number.isFinite(paymentAmount) || paymentAmount <= 0 ||
+    if (!isUuid(staffId) || !isCurrency(currency) || typeof amount === 'boolean' || !Number.isFinite(paymentAmount) || paymentAmount <= 0 ||
         paymentAmount > maxPaymentAmount || Math.abs(Math.round(paymentAmount * 100) - paymentAmount * 100) > 1e-6) {
-      return res.status(400).json({ error: 'A staff ID and a positive payment amount are required' });
+      return res.status(400).json({ error: 'A staff ID, a currency (USD or CDF) and a positive payment amount are required' });
     }
     if (!idempotencyKey || !idempotencyKeyPattern.test(idempotencyKey)) {
       return res.status(400).json({ error: 'An Idempotency-Key header is required' });
     }
     try {
-      const { payment, remaining, replayed } = await commissionService.payStaffCommissions({
-        staffId, amount: paymentAmount, idempotencyKey, paidByUserId: req.user?.id ?? null,
+      const { payout, replayed } = await recordPayout({
+        staffId, kind: 'payment', amount: paymentAmount, currency, paymentMethod: 'cash', note: null, idempotencyKey,
+        paidByUserId: req.user?.id ?? null,
       });
+      const [pay] = await summarizePay([staffId]);
       res.json({
         message: replayed ? 'Commission payment already processed' : 'Commission payment processed',
-        paymentId: payment.id,
-        paid: Number(payment.amount),
-        commissionCount: payment.commissionCount,
-        remaining,
+        paymentId: payout.id,
+        currency: payout.currency,
+        paid: Number(payout.amount),
+        remaining: pay.byCurrency[currency].remaining,
         replayed,
       });
     } catch (error) {
-      if (error instanceof CommissionPaymentError) return res.status(error.status).json({ error: error.message });
+      if (error instanceof PayrollError) return res.status(error.status).json({ error: error.message });
       res.status(500).json({ error: 'Failed to pay commission' });
     }
   },

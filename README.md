@@ -12,7 +12,7 @@ Prérequis : Node.js ≥ 20.19 (≥ 22.18 pour `npm test` côté web ; testé av
 cd salon-app-backend
 cp .env.example .env      # puis remplir les valeurs
 npm install
-npm run dev               # applique les migrations en attente, puis écoute sur http://localhost:3000
+npm run dev               # applique les migrations en attente, puis écoute sur http://localhost:3000 (redémarre à chaque modification)
 
 # Application web (autre terminal)
 cd salon-app-web
@@ -87,25 +87,79 @@ les actions non autorisées.
 
 | Action | Administrateur | Caisse | Équipe |
 | --- | :---: | :---: | :---: |
-| Encaisser, dépenses (saisie), clients et rendez-vous | ✓ | ✓ | ✓ |
-| Consulter catalogue, équipe, ventes, rapports | ✓ | ✓ | ✓ |
+| Encaisser, encaisser une dette, dépenses (saisie), clients et rendez-vous | ✓ | ✓ | ✓ |
+| Consulter catalogue, équipe, ventes, reçus, rapports des ventes et des dettes | ✓ | ✓ | ✓ |
 | Enregistrer les présences | ✓ | ✓ | lecture |
+| Historique journalier, rapport de caisse, entrées/sorties et comptage de caisse | ✓ | ✓ | — |
 | Clôturer la journée | ✓ | ✓ | — |
-| Commissions et rapport d'un membre | tous | sa fiche liée | sa fiche liée |
-| Payer les commissions | ✓ | — | — |
+| Fiche de rémunération d'un membre (prestations, commissions, versements) | tous | sa fiche liée | sa fiche liée |
+| Rapport de l'équipe, payer une rémunération ou une avance | ✓ | — | — |
 | Archiver/restaurer un client, modifier ses points fidélité | ✓ | — | — |
-| Catalogue, équipe, comptes, annulations de vente, suppression de dépenses, clôture d'exercice | ✓ | — | — |
+| Catalogue, équipe, comptes, annulations de vente et de dépense, clôture d'exercice | ✓ | — | — |
+| Devise de base, taux USD/CDF, coordonnées de l'établissement, période de rémunération | ✓ | lecture | lecture |
 
-Un accès « Caisse » ou « Équipe » voit ses propres commissions une fois relié à sa fiche de
+Un accès « Caisse » ou « Équipe » voit sa propre fiche de rémunération une fois relié à sa fiche de
 l'équipe (Paramètres → Comptes utilisateurs → Fiche équipe).
 
 ## Données financières
 
+- **Devises : jamais de conversion cachée.** Chaque vente, paiement, dette, remboursement, commission,
+  versement à l'équipe, dépense et mouvement de caisse garde sa devise. Les totaux (caisse, rapports,
+  historique, clôtures, rémunérations) sont toujours présentés **par devise**, jamais additionnés, et
+  aucun montant n'est affiché « converti » dans l'autre devise. Les seules conversions sont explicites :
+  le caissier choisit d'encaisser dans l'autre devise que celle du catalogue (le taux du salon est
+  affiché sur chaque ligne et enregistré sur la vente), ou l'administrateur change la devise de base
+  (les prix du catalogue, salaires et totaux clients sont alors convertis au taux affiché, après
+  confirmation).
+- La devise de base et le taux USD/CDF sont des réglages du salon (`GET/PUT /api/settings`), partagés
+  par tous les postes. L'API calcule elle-même les prix d'une vente (arrondis au centime ou au franc)
+  et la refuse (409) si le total affiché par la caisse ne correspond plus.
+- **Reçus.** Chaque vente reçoit un numéro de reçu séquentiel. Le reçu reprend le logo et les
+  coordonnées de l'établissement (Paramètres → Établissement : nom, e-mail, téléphone, n° d'impôt,
+  adresse), les lignes avec le nom et le prix au moment de la vente, la remise éventuelle, le total, les
+  paiements, le reste dû, le mode de paiement et la devise ; il s'imprime ou s'enregistre en PDF.
+- **Annulation d'une vente** (`POST /api/sales/:id/cancel`, motif facultatif) : dans une transaction, le
+  stock est rétabli, la commission est marquée annulée (conservée), le total du client est corrigé, la
+  vente garde ses lignes et paiements avec la date, l'auteur et le motif. Elle ne compte plus dans aucun
+  total (encaissé, caisse, chiffre d'affaires, journal de caisse), comme si elle n'avait pas eu lieu.
+  Elle reste visible 7 jours après l'annulation (Ventes → Annulées, détail de la journée dans
+  l'Historique), puis n'est plus affichée ; elle est conservée en base. Une seconde annulation est
+  refusée (409).
+- **Dettes.** Un paiement partiel laisse un reste dû ; chaque règlement ultérieur
+  (`POST /api/sales/:id/payments`, idempotent) est tracé dans `sale_payments`, dans la devise de la vente.
+- **Prix à la caisse.** Le caissier choisit une prestation dans la liste ; son prix catalogue est
+  prérempli et peut être modifié (avant l'ajout ou dans le panier). Le prix catalogue d'origine reste
+  enregistré sur la ligne (`catalogUnitPrice`) ; la commission porte sur le prix réellement facturé.
+- **Produits.** Photo choisie ou prise sur l'appareil (compressée, sans photo : logo du salon). Un produit
+  épuisé déclenche une alerte rouge affichée sur toutes les pages.
+- **Journal de caisse.** Il est calculé à partir des opérations elles-mêmes (encaissements, règlements de
+  dettes, dépenses et leurs annulations, rémunérations, entrées/sorties manuelles) ;
+  le comptage de la caisse compare les espèces comptées au solde théorique des opérations en espèces
+  du jour. Une dépense saisie par erreur est annulée, jamais effacée.
+- **Bénéfice estimé** = chiffre d'affaires − coût d'achat des produits vendus (enregistré à la vente) −
+  commissions acquises − dépenses − salaires fixes versés. Il est affiché « non calculable » quand une
+  ancienne vente de produit n'a pas de coût enregistré.
+- **Rémunérations.** Commission = montant des prestations attribuées × taux du membre (40 % par
+  défaut, réglable par membre), dans la devise de chaque prestation. Les avances et paiements
+  (`POST /api/payroll/:staffId/payouts`, idempotents, verrouillés par membre) sont déduits une seule
+  fois : reste à payer = acquis − avances − paiements, par devise. Il revient à zéro quand tout est
+  payé ; un impayé passe à la période suivante (hebdomadaire ou mensuelle, Paramètres) et le cumul
+  des prestations reste visible. Un paiement ne peut pas dépasser le reste dû ; une avance le peut.
+  Les salaires fixes sont mensuels, dans la devise de base.
+- **Historique journalier.** Chaque journée d'activité se consulte en détail (ventes, prestations et
+  travailleurs, produits, mouvements de caisse, dépenses, dettes, annulations, rémunérations,
+  comptages, avec les comptes qui ont saisi chaque opération). Une journée clôturée garde en plus ses
+  totaux figés ; rien n'est écrasé quand une nouvelle journée commence.
+- **Rendez-vous.** La prestation se choisit dans le catalogue ; son prix est figé à la réservation. Un
+  chevauchement avec un autre rendez-vous du même membre est signalé (et peut être confirmé).
+- Les membres de l'équipe au salaire fixe ne génèrent pas de commission. Les prestations peuvent avoir
+  un tarif femmes et un tarif hommes ; la ligne de vente enregistre le tarif appliqué.
+
 - Un client ou un membre de l'équipe qui a un historique (ventes, commissions, présences,
   rendez-vous) est archivé, jamais supprimé ; la suppression définitive n'a lieu que sans aucun
   historique, dans une transaction. La base refuse aussi ces suppressions (`ON DELETE RESTRICT`).
-- Le paiement des commissions est transactionnel, verrouillé par membre et idempotent (en-tête
-  `Idempotency-Key`) ; chaque règlement est tracé dans `commission_payments`.
+- Les anciens règlements de commissions (`commission_payments`) ont été repris comme paiements dans
+  `staff_payouts` (migration `007`) ; les routes `/api/commissions/*` utilisent ce même registre.
 
 ## Limites connues
 
@@ -114,4 +168,11 @@ l'équipe (Paramètres → Comptes utilisateurs → Fiche équipe).
   sur Vercel. Passer à un cookie `HttpOnly` suppose que l'API et le site partagent un domaine.
 - La limitation des tentatives de connexion est en mémoire : propre à chaque instance de l'API,
   remise à zéro au redémarrage.
-- Les totaux de commissions additionnent les montants USD et CDF sans conversion.
+- Données antérieures à la migration `006` : les commissions et dépenses dont la devise n'était pas
+  connue ont été rattachées à l'USD (devise par défaut jusque-là) ; les anciennes ventes sans devise
+  restent signalées comme telles et les anciennes clôtures gardent leurs totaux mélangés.
+- Migration `007` : les anciennes ventes reçoivent un numéro de reçu dans l'ordre de création et leur
+  paiement initial est repris ; leurs lignes de produits n'ont pas de coût d'achat (bénéfice « non
+  calculable » sur ces périodes). Les ventes annulées avant cette version prennent leur dernière mise
+  à jour comme date d'annulation.
+- La caisse n'a pas de saisie de remise : le reçu affiche une remise seulement si elle existe.

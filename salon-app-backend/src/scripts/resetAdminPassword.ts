@@ -1,4 +1,4 @@
-import { sequelize } from '../config/database';
+import { connectDB, sequelize } from '../config/database';
 import { assertMigrationsApplied } from '../db/migrator';
 import { User } from '../models/User';
 
@@ -34,7 +34,7 @@ const readHidden = (label: string): Promise<string> => {
 };
 
 const resetAdminPassword = async () => {
-  await sequelize.authenticate();
+  await connectDB();
   await assertMigrationsApplied();
   await sequelize.transaction(async (transaction) => {
     const administrators = await User.findAll({

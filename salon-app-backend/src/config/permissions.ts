@@ -26,6 +26,11 @@ export const policy = {
   // Commissions and per-member reports of any team member (others only see their own).
   readAnyStaffFinancials: ['admin'],
   payCommissions: ['admin'],
+  // Base currency and USD/CDF rate, shared by every device.
+  manageSettings: ['admin'],
+  // Daily history and cash journal (they show team payouts), cash entries, withdrawals and counts.
+  readHistory: ['admin', 'cashier'],
+  recordCash: ['admin', 'cashier'],
 } as const satisfies Record<string, readonly Role[]>;
 
 export const hasRole = (roles: readonly Role[], role: Role | undefined) => role !== undefined && roles.includes(role);

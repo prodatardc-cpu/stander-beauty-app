@@ -1,17 +1,24 @@
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
-import type { Product, Sale, Service, StockMovement } from '../types';
+import { useCallback, useEffect, useMemo, useState, type ChangeEvent, type FormEvent } from 'react';
+import { useSearchTerm } from '../hooks/useSearchTerm';
+import { useNavigate } from 'react-router-dom';
+import type { Product, Sale, StockMovement } from '../types';
 import { formatDateTime } from '../utils/format';
 import { apiClient, getApiError } from '../services/api';
 import { formatCurrency, useCurrency } from '../services/currency';
+import { addToTill } from '../services/till';
+import { notifyStockChanged } from '../services/stockEvents';
 import { useIsAdmin } from '../hooks/useAuth';
 import { useFeedback } from '../components/UI/Feedback';
 import { Modal } from '../components/UI/Modal';
 import { EmptyState, PageHeader } from '../components/UI/PageHeader';
+import { BrandMark } from '../components/Common/BrandMark';
+import { compressPhoto } from '../utils/image';
 
-type CatalogTab = 'products' | 'services';
-const productDraft = { name: '', sku: '', category: '', priceBuy: '', priceSell: '', quantityStock: '0', lowStockThreshold: '5', imageUrl: '' };
-const serviceDraft = { name: '', category: '', description: '', price: '', audience: 'unisex' as Service['audience'], womenPrice: '', menPrice: '' };
-const defaultServiceDuration = 30;
+// Product photos are shown 4:3 in the shop window.
+const photoSize = { width: 480, height: 360 };
+const isPhotoData = (value: string) => value.startsWith('data:image/');
+
+const productDraft = { name: '', sku: '', category: '', description: '', priceBuy: '', priceSell: '', quantityStock: '0', lowStockThreshold: '5', imageUrl: '' };
 const productTemplates = [
   { name: 'Shampoing hydratant', sku: 'LUNA-SHAM-001', category: 'Soins capillaires', priceBuy: '7', priceSell: '12', quantityStock: '10' },
   { name: 'Après-shampoing', sku: 'LUNA-COND-001', category: 'Soins capillaires', priceBuy: '7', priceSell: '12', quantityStock: '10' },
@@ -32,74 +39,36 @@ const productTemplates = [
   { name: 'Huile à barbe', sku: 'LUNA-BEARD-001', category: 'Barbier', priceBuy: '5', priceSell: '11', quantityStock: '6' },
   { name: 'Lames de rasoir', sku: 'LUNA-BLADE-001', category: 'Barbier', priceBuy: '2', priceSell: '6', quantityStock: '20' },
 ];
-const serviceTemplates = [
-  { name: 'Tresse', category: 'Tresses', price: '35', description: 'Prix estimatif, à adapter selon le style et la longueur.' },
-  { name: 'Nattes', category: 'Tresses', price: '30', description: 'Prix estimatif, à adapter selon le style et la longueur.' },
-  { name: 'Vanilles / twists', category: 'Tresses', price: '40', description: 'Prix estimatif, à adapter selon le style et la longueur.' },
-  { name: 'Locks', category: 'Coiffure', price: '45', description: 'Entretien ou coiffage des locks.' },
-  { name: 'Coiffure femme', category: 'Coiffure', price: '25', description: '' },
-  { name: 'Coiffure homme', category: 'Coiffure', price: '18', description: '' },
-  { name: 'Coupe femme', category: 'Coupe', price: '25', description: '' },
-  { name: 'Coupe homme', category: 'Barbier', price: '18', description: '' },
-  { name: 'Coupe enfant', category: 'Coupe', price: '12', description: '' },
-  { name: 'Brushing', category: 'Coiffure', price: '20', description: '' },
-  { name: 'Shampoing', category: 'Soins capillaires', price: '10', description: '' },
-  { name: 'Nettoyage des cheveux', category: 'Soins capillaires', price: '12', description: '' },
-  { name: 'Soin capillaire', category: 'Soins capillaires', price: '22', description: '' },
-  { name: 'Lissage', category: 'Coiffure', price: '45', description: 'Prix estimatif, à adapter selon la longueur.' },
-  { name: 'Défrisage', category: 'Coiffure', price: '40', description: 'Prix estimatif, à adapter selon la longueur.' },
-  { name: 'Coloration', category: 'Coloration', price: '35', description: 'Prix estimatif, hors supplément éventuel.' },
-  { name: 'Mèches / balayage', category: 'Coloration', price: '55', description: 'Prix estimatif, à adapter selon la longueur.' },
-  { name: 'Pose d’extensions', category: 'Extensions', price: '70', description: 'Prix estimatif, hors coût des extensions.' },
-  { name: 'Chignon / coiffure événementielle', category: 'Coiffure événementielle', price: '50', description: '' },
-  { name: 'Taille de barbe / rasage', category: 'Barbier', price: '15', description: '' },
-  { name: 'Teinture', category: 'Coloration', price: '30', description: 'Prix estimatif, à adapter selon la prestation.' },
-  { name: 'Teinture barbe', category: 'Barbier', price: '18', description: '' },
-  { name: 'Manucure', category: 'Onglerie', price: '20', description: '' },
-  { name: 'Pédicure', category: 'Onglerie', price: '25', description: '' },
-  { name: 'Soin du visage', category: 'Soins esthétiques', price: '35', description: '' },
-  { name: 'Épilation', category: 'Soins esthétiques', price: '15', description: 'Prix estimatif, à adapter selon la zone.' },
-  { name: 'Maquillage', category: 'Soins esthétiques', price: '35', description: '' },
-];
-const audienceLabels: Record<Service['audience'], string> = { women: 'Femmes', men: 'Hommes', unisex: 'Mixte' };
 type ProductForm = typeof productDraft;
-type ServiceForm = typeof serviceDraft;
 
 const toProductForm = (product: Product): ProductForm => ({
-  name: product.name, sku: product.sku, category: product.category,
+  name: product.name, sku: product.sku, category: product.category, description: product.description ?? '',
   priceBuy: String(Number(product.priceBuy)), priceSell: String(Number(product.priceSell)),
   quantityStock: String(product.quantityStock), lowStockThreshold: String(product.lowStockThreshold ?? 5),
   imageUrl: product.imageUrl ?? '',
 });
 
 type StockFilter = 'all' | 'low' | 'out' | 'inactive';
+type View = 'cards' | 'table';
 const movementLabels: Record<StockMovement['reason'], string> = {
   initial: 'Stock initial', reception: 'Réception', sale: 'Vente', sale_cancel: 'Vente annulée', adjustment: 'Ajustement d’inventaire',
 };
 const isLowStock = (product: Product) => product.quantityStock <= product.lowStockThreshold;
 
-const toServiceForm = (service: Service): ServiceForm => ({
-  name: service.name, category: service.category, description: service.description ?? '',
-  price: String(Number(service.price)), audience: service.audience,
-  womenPrice: service.womenPrice == null ? '' : String(Number(service.womenPrice)),
-  menPrice: service.menPrice == null ? '' : String(Number(service.menPrice)),
-});
-
 export const BoutiquePage = () => {
   const currency = useCurrency();
   const isAdmin = useIsAdmin();
+  const navigate = useNavigate();
   const { notify, confirm } = useFeedback();
-  const [tab, setTab] = useState<CatalogTab>('products');
   const [products, setProducts] = useState<Product[]>([]);
-  const [services, setServices] = useState<Service[]>([]);
   const [sales, setSales] = useState<Sale[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [query, setQuery] = useState('');
+  const [query, setQuery] = useSearchTerm();
   const [saving, setSaving] = useState(false);
+  const [view, setView] = useState<View>('cards');
   // null = closed, 'new' = creation, otherwise the edited record id
   const [productEditor, setProductEditor] = useState<{ id: string | 'new'; form: ProductForm } | null>(null);
-  const [serviceEditor, setServiceEditor] = useState<{ id: string | 'new'; form: ServiceForm } | null>(null);
   const [stockTarget, setStockTarget] = useState<Product | null>(null);
   const [stockQuantity, setStockQuantity] = useState('');
   const [stockNote, setStockNote] = useState('');
@@ -111,24 +80,24 @@ export const BoutiquePage = () => {
   const priceStep = currency === 'CDF' ? '1' : '0.01';
 
   const fetchCatalog = useCallback(async () => {
-    const [productResponse, serviceResponse, salesResponse] = await Promise.all([
+    const [productResponse, salesResponse] = await Promise.all([
       apiClient.get<Product[]>('/products'),
-      apiClient.get<Service[]>('/services'),
-      apiClient.get<Sale[]>('/sales'),
+      apiClient.get<Sale[]>('/sales', { status: 'completed' }),
     ]);
     return () => {
       setProducts(productResponse.data);
-      setServices(serviceResponse.data);
       setSales(salesResponse.data);
       setError('');
     };
   }, []);
 
+  // Called after every change made here: the out-of-stock alert of the other pages refreshes too.
   const loadCatalog = useCallback(async () => {
+    notifyStockChanged();
     try {
       (await fetchCatalog())();
     } catch (requestError) {
-      setError(getApiError(requestError, 'Impossible de charger le catalogue.'));
+      setError(getApiError(requestError, 'Impossible de charger la boutique.'));
     }
   }, [fetchCatalog]);
 
@@ -136,11 +105,12 @@ export const BoutiquePage = () => {
     let active = true;
     fetchCatalog()
       .then((apply) => { if (active) apply(); })
-      .catch((requestError) => { if (active) setError(getApiError(requestError, 'Impossible de charger le catalogue.')); })
+      .catch((requestError) => { if (active) setError(getApiError(requestError, 'Impossible de charger la boutique.')); })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
   }, [fetchCatalog]);
 
+  // Units sold per product, cancelled sales excluded.
   const soldByProduct = useMemo(() => {
     const totals = new Map<string, number>();
     for (const sale of sales) {
@@ -154,16 +124,47 @@ export const BoutiquePage = () => {
   const term = query.trim().toLowerCase();
   const categories = [...new Set(products.map((product) => product.category))].sort((a, b) => a.localeCompare(b, 'fr'));
   const visibleProducts = products.filter((product) =>
-    (!term || `${product.name} ${product.sku} ${product.category}`.toLowerCase().includes(term)) &&
+    (!term || `${product.name} ${product.sku} ${product.category} ${product.description ?? ''}`.toLowerCase().includes(term)) &&
     (!categoryFilter || product.category === categoryFilter) &&
     (stockFilter === 'all' ? product.status !== 'inactive'
       : stockFilter === 'inactive' ? product.status === 'inactive'
       : product.status !== 'inactive' && (stockFilter === 'out' ? product.quantityStock === 0 : isLowStock(product) && product.quantityStock > 0)));
-  const visibleServices = services.filter((service) => !term || `${service.name} ${service.category}`.toLowerCase().includes(term));
   const activeProducts = products.filter((product) => product.status !== 'inactive');
   const outOfStock = activeProducts.filter((product) => product.quantityStock === 0);
   const lowStock = activeProducts.filter((product) => isLowStock(product) && product.quantityStock > 0);
   const stockValue = products.reduce((sum, product) => sum + Number(product.priceBuy) * product.quantityStock, 0);
+
+  // Reads a picture chosen (or taken) on the device, compressed for the API.
+  const readPhoto = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return null;
+    try {
+      return await compressPhoto(file, photoSize);
+    } catch {
+      notify('Cette image ne peut pas être utilisée. Essayez une photo JPEG ou PNG.', 'error');
+      return null;
+    }
+  };
+
+  // Directly from the product card.
+  const changeCardPhoto = async (product: Product, event: ChangeEvent<HTMLInputElement>) => {
+    const photo = await readPhoto(event);
+    if (!photo) return;
+    try {
+      await apiClient.patch(`/products/${product.id}`, { imageUrl: photo });
+      notify(`Photo de « ${product.name} » enregistrée.`);
+      await loadCatalog();
+    } catch (requestError) {
+      notify(getApiError(requestError, 'Impossible d’enregistrer cette photo.'), 'error');
+    }
+  };
+
+  const sendToTill = (product: Product) => {
+    addToTill({ type: 'product', itemId: product.id, name: product.name, basePrice: Number(product.priceSell), quantity: 1 }, currency);
+    notify(`« ${product.name} » ajouté à la vente en cours.`);
+    navigate('/caisse');
+  };
 
   const saveProduct = async (event: FormEvent) => {
     event.preventDefault();
@@ -172,7 +173,7 @@ export const BoutiquePage = () => {
     setSaving(true);
     try {
       const payload = {
-        name: form.name, sku: form.sku, category: form.category,
+        name: form.name, sku: form.sku, category: form.category, description: form.description.trim(),
         priceBuy: Number(form.priceBuy), priceSell: Number(form.priceSell),
         lowStockThreshold: Number(form.lowStockThreshold),
         imageUrl: form.imageUrl.trim(),
@@ -190,45 +191,6 @@ export const BoutiquePage = () => {
       notify(getApiError(requestError, 'Impossible d’enregistrer le produit. Vérifiez le SKU et les prix.'), 'error');
     } finally {
       setSaving(false);
-    }
-  };
-
-  const saveService = async (event: FormEvent) => {
-    event.preventDefault();
-    if (!serviceEditor) return;
-    const { id, form } = serviceEditor;
-    setSaving(true);
-    try {
-      const payload = {
-        name: form.name, category: form.category, description: form.description, audience: form.audience,
-        price: Number(form.price),
-        womenPrice: form.womenPrice ? Number(form.womenPrice) : null,
-        menPrice: form.menPrice ? Number(form.menPrice) : null,
-      };
-      if (id === 'new') {
-        await apiClient.post('/services', { ...payload, duration: defaultServiceDuration });
-        notify(`Prestation « ${form.name} » ajoutée.`);
-      } else {
-        await apiClient.patch(`/services/${id}`, payload);
-        notify(`Prestation « ${form.name} » mise à jour.`);
-      }
-      setServiceEditor(null);
-      await loadCatalog();
-    } catch (requestError) {
-      notify(getApiError(requestError, 'Impossible d’enregistrer la prestation. Vérifiez les prix.'), 'error');
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const toggleService = async (service: Service) => {
-    const status = service.status === 'active' ? 'inactive' : 'active';
-    try {
-      await apiClient.patch(`/services/${service.id}`, { status });
-      notify(status === 'active' ? `« ${service.name} » est de nouveau proposée.` : `« ${service.name} » est retirée de la caisse.`);
-      await loadCatalog();
-    } catch (requestError) {
-      notify(getApiError(requestError, 'Impossible de modifier cette prestation.'), 'error');
     }
   };
 
@@ -320,125 +282,108 @@ export const BoutiquePage = () => {
     let sku = template.sku;
     let suffix = 2;
     while (products.some((product) => product.sku.toLowerCase() === sku.toLowerCase())) sku = `${template.sku}-${String(suffix++).padStart(2, '0')}`;
-    setProductEditor({ ...productEditor, form: { ...template, sku, lowStockThreshold: productEditor.form.lowStockThreshold, imageUrl: '' } });
-  };
-
-  const applyServiceTemplate = (name: string) => {
-    const template = serviceTemplates.find((item) => item.name === name);
-    if (!template || !serviceEditor) return;
-    const lowered = template.name.toLowerCase();
-    setServiceEditor({ ...serviceEditor, form: { ...template, audience: lowered.includes('homme') ? 'men' : lowered.includes('femme') ? 'women' : 'unisex', womenPrice: '', menPrice: '' } });
+    setProductEditor({ ...productEditor, form: { ...productEditor.form, ...template, sku } });
   };
 
   const setProductField = (key: keyof ProductForm, value: string) =>
     setProductEditor((current) => current && { ...current, form: { ...current.form, [key]: value } });
-  const setServiceField = (key: keyof ServiceForm, value: string) =>
-    setServiceEditor((current) => current && { ...current, form: { ...current.form, [key]: value } });
+
+  const stockBadge = (product: Product) => product.quantityStock === 0
+    ? <span className="badge badge-danger">Épuisé</span>
+    : isLowStock(product) ? <span className="badge badge-warning">Plus que {product.quantityStock}</span>
+    : <span className="badge badge-success">{product.quantityStock} en stock</span>;
+
+  const productActions = (product: Product) => <>
+    {product.status !== 'inactive' && <button type="button" className="link-button" onClick={() => { setStockTarget(product); setStockQuantity(''); setStockNote(''); }}>Réception</button>}
+    <button type="button" className="link-button" onClick={() => void showHistory(product)}>Mouvements</button>
+    {isAdmin && <>
+      <button type="button" className="link-button" onClick={() => { setAdjustTarget(product); setStockQuantity(String(product.quantityStock)); setStockNote(''); }}>Inventaire</button>
+      <button type="button" className="link-button" onClick={() => setProductEditor({ id: product.id, form: toProductForm(product) })}>Modifier</button>
+      <button type="button" className={`link-button${product.status === 'inactive' ? '' : ' is-danger'}`} onClick={() => void toggleProduct(product)}>{product.status === 'inactive' ? 'Réactiver' : 'Désactiver'}</button>
+      {!(soldByProduct.get(product.id) ?? 0) && <button type="button" className="link-button is-danger" onClick={() => void deleteProduct(product)}>Supprimer</button>}
+    </>}
+  </>;
 
   return (
-    <section className="space-y-6">
+    <section className="space-y-5">
       <PageHeader
         eyebrow="Catalogue"
-        title="Boutique et prestations"
-        subtitle={`${products.length} produit(s) · ${services.filter((service) => service.status === 'active').length} prestation(s) active(s) · valeur du stock ${formatCurrency(stockValue, currency)}`}
-        actions={isAdmin && (tab === 'products'
-          ? <button type="button" className="btn btn-primary" onClick={() => setProductEditor({ id: 'new', form: productDraft })}>Ajouter un produit</button>
-          : <button type="button" className="btn btn-primary" onClick={() => setServiceEditor({ id: 'new', form: serviceDraft })}>Ajouter une prestation</button>)}
+        title="Boutique"
+        subtitle={`${activeProducts.length} produit(s) en vente · prix en ${currency}${isAdmin ? ` · valeur du stock (prix d’achat) ${formatCurrency(stockValue, currency)}` : ''}`}
+        actions={isAdmin && <button type="button" className="btn btn-primary" onClick={() => setProductEditor({ id: 'new', form: productDraft })}>Ajouter un produit</button>}
       />
 
-      <div className="flex flex-wrap items-end justify-between gap-4">
-        <div className="tabs" role="tablist" aria-label="Catalogue">
-          <button type="button" role="tab" aria-selected={tab === 'products'} className={`tab${tab === 'products' ? ' is-active' : ''}`} onClick={() => setTab('products')}>Produits ({products.length})</button>
-          <button type="button" role="tab" aria-selected={tab === 'services'} className={`tab${tab === 'services' ? ' is-active' : ''}`} onClick={() => setTab('services')}>Prestations ({services.length})</button>
+      {error && <p role="alert" className="text-sm text-red-700">{error}</p>}
+      {lowStock.length > 0 && (
+        <p role="status" className="till-alert"><span className="tone-expense"><strong>Stock bas :</strong> {lowStock.map((product) => `${product.name} (${product.quantityStock}, seuil ${product.lowStockThreshold})`).join(' · ')}</span></p>
+      )}
+      <div className="toolbar">
+        <input type="search" aria-label="Rechercher un produit" placeholder="Rechercher un nom, un SKU, une catégorie…" value={query} onChange={(event) => setQuery(event.target.value)} className="search-input" />
+        <select aria-label="Filtrer par catégorie" value={categoryFilter} onChange={(event) => setCategoryFilter(event.target.value)}>
+          <option value="">Toutes les catégories</option>
+          {categories.map((category) => <option key={category} value={category}>{category}</option>)}
+        </select>
+        <select aria-label="Filtrer par état du stock" value={stockFilter} onChange={(event) => setStockFilter(event.target.value as StockFilter)}>
+          <option value="all">Produits en vente</option>
+          <option value="low">Stock bas ({lowStock.length})</option>
+          <option value="out">Épuisés ({outOfStock.length})</option>
+          <option value="inactive">Désactivés ({products.length - activeProducts.length})</option>
+        </select>
+        <div className="tabs" role="tablist" aria-label="Présentation">
+          <button type="button" role="tab" aria-selected={view === 'cards'} className={`tab${view === 'cards' ? ' is-active' : ''}`} onClick={() => setView('cards')}>Vitrine</button>
+          <button type="button" role="tab" aria-selected={view === 'table'} className={`tab${view === 'table' ? ' is-active' : ''}`} onClick={() => setView('table')}>Gestion du stock</button>
         </div>
-        <input type="search" aria-label="Rechercher dans le catalogue" placeholder="Rechercher un nom, un SKU, une catégorie…" value={query} onChange={(event) => setQuery(event.target.value)} className="search-input px-3 py-2 text-sm" />
       </div>
 
-      {error && <p role="alert" className="text-sm text-red-700">{error}</p>}
-      {tab === 'products' && outOfStock.length > 0 && (
-        <div role="alert" className="text-sm text-red-700">
-          <p className="font-semibold">Rupture de stock : intervention nécessaire</p>
-          <p className="mt-1">{outOfStock.map((product) => product.name).join(' · ')}</p>
-        </div>
-      )}
-      {tab === 'products' && lowStock.length > 0 && (
-        <p role="status" className="border-l-4 border-orange-700 bg-orange-50 px-4 py-3 text-sm text-gray-900">
-          <span className="font-semibold">Stock bas à réapprovisionner : </span>
-          {lowStock.map((product) => `${product.name} (${product.quantityStock} restant${product.quantityStock > 1 ? 's' : ''}, seuil ${product.lowStockThreshold})`).join(' · ')}
-        </p>
-      )}
-      {tab === 'products' && products.length > 0 && (
-        <div className="toolbar">
-          <select aria-label="Filtrer par catégorie" value={categoryFilter} onChange={(event) => setCategoryFilter(event.target.value)}>
-            <option value="">Toutes les catégories</option>
-            {categories.map((category) => <option key={category} value={category}>{category}</option>)}
-          </select>
-          <select aria-label="Filtrer par état du stock" value={stockFilter} onChange={(event) => setStockFilter(event.target.value as StockFilter)}>
-            <option value="all">Produits en vente</option>
-            <option value="low">Stock bas ({lowStock.length})</option>
-            <option value="out">Épuisés ({outOfStock.length})</option>
-            <option value="inactive">Désactivés ({products.length - activeProducts.length})</option>
-          </select>
-        </div>
-      )}
-
-      <div className="overflow-x-auto">
-        {loading ? <p className="loading-line">Chargement du catalogue…</p> : tab === 'products' ? (
-          visibleProducts.length ? <table className="data-table">
-            <thead><tr><th>Produit</th><th>Catégorie</th><th className="num">Prix d’achat</th><th className="num">Prix de vente</th><th className="num">Marge</th><th className="num">Entrées</th><th className="num">Vendus</th><th className="num">En stock</th><th className="actions">Actions</th></tr></thead>
-            <tbody>{visibleProducts.map((product) => {
-              const margin = Number(product.priceSell) - Number(product.priceBuy);
-              const isLow = product.quantityStock <= product.lowStockThreshold;
-              return <tr key={product.id}>
-                <td>
-                  <span className="flex items-center gap-3">
-                    {product.imageUrl ? <img src={product.imageUrl} alt="" className="h-10 w-10 shrink-0 rounded object-cover" loading="lazy" /> : <span aria-hidden="true" className="avatar avatar-initials" style={{ width: 40, height: 40, borderRadius: 4, fontSize: 13 }}>{product.name.slice(0, 2).toUpperCase()}</span>}
-                    <span><span className="cell-title">{product.name}</span><span className="cell-sub">{product.sku}{product.status === 'inactive' && ' · désactivé'}</span></span>
-                  </span>
-                </td>
+      {loading ? <p className="loading-line">Chargement de la boutique…</p> : !visibleProducts.length
+        ? <EmptyState title={term || categoryFilter || stockFilter !== 'all' ? 'Aucun produit ne correspond à ces filtres.' : 'Aucun produit enregistré.'} hint={isAdmin && !term ? 'Ajoutez vos premiers produits pour les vendre en caisse.' : undefined} />
+        : view === 'cards' ? (
+          <div className="product-grid">
+            {visibleProducts.map((product) => <article key={product.id} className={`product-card${product.quantityStock === 0 ? ' is-soldout' : ''}`}>
+              <div className="product-media">
+                {product.imageUrl ? <img src={product.imageUrl} alt="" loading="lazy" /> : <BrandMark className="product-placeholder" />}
+                {isAdmin && <label className="product-photo-button">
+                  {product.imageUrl ? 'Changer la photo' : 'Ajouter une photo'}
+                  <input type="file" accept="image/*" className="sr-only" aria-label={`Photo de ${product.name}`} onChange={(event) => void changeCardPhoto(product, event)} />
+                </label>}
+              </div>
+              <div className="product-body">
+                <p className="product-category">{product.category}</p>
+                <h3 className="product-name">{product.name}</h3>
+                {product.description && <p className="product-description">{product.description}</p>}
+                <div className="product-meta">
+                  {stockBadge(product)}
+                  <span className="product-price">{formatCurrency(product.priceSell, currency)}</span>
+                </div>
+                <button type="button" className="btn btn-primary btn-sm w-full" disabled={product.status !== 'active' || product.quantityStock < 1} onClick={() => sendToTill(product)}>
+                  {product.quantityStock < 1 ? 'Indisponible' : 'Ajouter à la caisse'}
+                </button>
+              </div>
+            </article>)}
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="data-table compact-table">
+              <thead><tr><th>Produit</th><th>Catégorie</th>{isAdmin && <th className="num">Achat</th>}<th className="num">Vente</th>{isAdmin && <th className="num">Marge</th>}<th className="num">Entrées</th><th className="num">Vendus</th><th className="num">Stock</th><th className="actions">Actions</th></tr></thead>
+              <tbody>{visibleProducts.map((product) => <tr key={product.id}>
+                <td><span className="cell-title">{product.name}</span><span className="cell-sub">{product.sku}{product.status === 'inactive' && ' · désactivé'}</span></td>
                 <td>{product.category}</td>
-                <td className="num">{formatCurrency(product.priceBuy, currency)}</td>
+                {isAdmin && <td className="num">{formatCurrency(product.priceBuy, currency)}</td>}
                 <td className="num">{formatCurrency(product.priceSell, currency)}</td>
-                <td className="num">{formatCurrency(margin, currency)}</td>
+                {isAdmin && <td className="num">{formatCurrency(Number(product.priceSell) - Number(product.priceBuy), currency)}</td>}
                 <td className="num">{product.quantityReceived}</td>
                 <td className="num">{soldByProduct.get(product.id) ?? 0}</td>
-                <td className="num"><span className={`badge ${product.quantityStock === 0 ? 'badge-danger' : isLow ? 'badge-warning' : 'badge-success'}`} title={`Seuil d’alerte : ${product.lowStockThreshold}`}>{product.quantityStock === 0 ? 'Épuisé' : product.quantityStock}</span></td>
-                <td className="actions"><span className="row-actions">
-                  {product.status !== 'inactive' && <button type="button" className="link-button" onClick={() => { setStockTarget(product); setStockQuantity(''); setStockNote(''); }}>Réception</button>}
-                  <button type="button" className="link-button" onClick={() => void showHistory(product)}>Historique</button>
-                  {isAdmin && <>
-                    <button type="button" className="link-button" onClick={() => { setAdjustTarget(product); setStockQuantity(String(product.quantityStock)); setStockNote(''); }}>Inventaire</button>
-                    <button type="button" className="link-button" onClick={() => setProductEditor({ id: product.id, form: toProductForm(product) })}>Modifier</button>
-                    <button type="button" className={`link-button${product.status === 'inactive' ? '' : ' is-danger'}`} onClick={() => void toggleProduct(product)}>{product.status === 'inactive' ? 'Réactiver' : 'Désactiver'}</button>
-                    {!(soldByProduct.get(product.id) ?? 0) && <button type="button" className="link-button is-danger" onClick={() => void deleteProduct(product)}>Supprimer</button>}
-                  </>}
-                </span></td>
-              </tr>;
-            })}</tbody>
-          </table> : <EmptyState title={term || categoryFilter || stockFilter !== 'all' ? 'Aucun produit ne correspond à ces filtres.' : 'Aucun produit enregistré.'} hint={isAdmin && !term ? 'Ajoutez vos premiers produits pour les vendre en caisse.' : undefined} />
-        ) : (
-          visibleServices.length ? <table className="data-table">
-            <thead><tr><th>Prestation</th><th>Public</th><th>Catégorie</th><th className="num">Tarif femme</th><th className="num">Tarif homme</th><th>État</th>{isAdmin && <th className="actions">Actions</th>}</tr></thead>
-            <tbody>{visibleServices.map((service) => <tr key={service.id}>
-              <td><span className="cell-title">{service.name}</span>{service.description && <span className="cell-sub">{service.description}</span>}</td>
-              <td>{audienceLabels[service.audience]}</td>
-              <td>{service.category}</td>
-              <td className="num">{service.audience === 'men' ? '—' : formatCurrency(service.womenPrice ?? service.price, currency)}</td>
-              <td className="num">{service.audience === 'women' ? '—' : formatCurrency(service.menPrice ?? service.price, currency)}</td>
-              <td><span className={`badge ${service.status === 'active' ? 'badge-success' : ''}`}>{service.status === 'active' ? 'Active' : 'Inactive'}</span></td>
-              {isAdmin && <td className="actions"><span className="row-actions">
-                <button type="button" className="link-button" onClick={() => setServiceEditor({ id: service.id, form: toServiceForm(service) })}>Modifier</button>
-                <button type="button" className={`link-button${service.status === 'active' ? ' is-danger' : ''}`} onClick={() => void toggleService(service)}>{service.status === 'active' ? 'Désactiver' : 'Réactiver'}</button>
-              </span></td>}
-            </tr>)}</tbody>
-          </table> : <EmptyState title={term ? 'Aucune prestation ne correspond à la recherche.' : 'Aucune prestation enregistrée.'} />
+                <td className="num">{stockBadge(product)}</td>
+                <td className="actions"><span className="row-actions">{productActions(product)}</span></td>
+              </tr>)}</tbody>
+            </table>
+          </div>
         )}
-      </div>
 
       {productEditor && (
         <Modal
           title={productEditor.id === 'new' ? 'Nouveau produit' : 'Modifier le produit'}
-          description={productEditor.id === 'new' ? 'Partez d’un modèle ou saisissez votre propre produit.' : 'Le stock se modifie via « Réception » ou les ventes.'}
+          description={productEditor.id === 'new' ? 'Partez d’un modèle ou saisissez votre propre produit.' : 'Le stock se modifie via « Réception », « Inventaire » ou les ventes.'}
           onClose={() => setProductEditor(null)}
         >
           <form onSubmit={saveProduct} className="form-grid">
@@ -455,41 +400,23 @@ export const BoutiquePage = () => {
             <label className="field">Prix de vente ({currency})<input required type="number" min="0" step={priceStep} value={productEditor.form.priceSell} onChange={(event) => setProductField('priceSell', event.target.value)} /></label>
             {productEditor.id === 'new' && <label className="field">Stock initial<input required type="number" min="0" step="1" value={productEditor.form.quantityStock} onChange={(event) => setProductField('quantityStock', event.target.value)} /></label>}
             <label className="field">Seuil d’alerte stock bas<input required type="number" min="0" step="1" value={productEditor.form.lowStockThreshold} onChange={(event) => setProductField('lowStockThreshold', event.target.value)} /><span className="field-hint">Une alerte s’affiche quand le stock atteint ce niveau.</span></label>
-            <label className="field field-wide">Image (adresse web, facultatif)<input type="url" placeholder="https://…" value={productEditor.form.imageUrl} onChange={(event) => setProductField('imageUrl', event.target.value)} /></label>
+            <label className="field field-wide">Description courte<textarea rows={2} maxLength={2000} placeholder="Ex. huile légère pour cheveux secs, 100 ml" value={productEditor.form.description} onChange={(event) => setProductField('description', event.target.value)} /></label>
+            <div className="field field-wide">Photo du produit
+              <div className="product-photo-field">
+                <div className="product-media">{productEditor.form.imageUrl ? <img src={productEditor.form.imageUrl} alt="" /> : <BrandMark className="product-placeholder" />}</div>
+                <div className="flex flex-wrap gap-2">
+                  <label className="btn btn-secondary btn-sm cursor-pointer">
+                    {productEditor.form.imageUrl ? 'Changer la photo' : 'Choisir une photo'}
+                    <input type="file" accept="image/*" className="sr-only" onChange={(event) => void readPhoto(event).then((photo) => { if (photo) setProductField('imageUrl', photo); })} />
+                  </label>
+                  {productEditor.form.imageUrl && <button type="button" className="btn btn-secondary btn-sm" onClick={() => setProductField('imageUrl', '')}>Retirer (logo du salon)</button>}
+                </div>
+              </div>
+              {!isPhotoData(productEditor.form.imageUrl) && <input type="url" placeholder="Ou une adresse web : https://…" value={productEditor.form.imageUrl} onChange={(event) => setProductField('imageUrl', event.target.value)} />}
+              <span className="field-hint">Sans photo, le logo du salon est affiché.</span>
+            </div>
             <div className="field-wide flex justify-end gap-2">
               <button type="button" className="btn btn-secondary" onClick={() => setProductEditor(null)}>Annuler</button>
-              <button type="submit" className="btn btn-primary" disabled={saving}>{saving ? 'Enregistrement…' : 'Enregistrer'}</button>
-            </div>
-          </form>
-        </Modal>
-      )}
-
-      {serviceEditor && (
-        <Modal
-          title={serviceEditor.id === 'new' ? 'Nouvelle prestation' : 'Modifier la prestation'}
-          description="Les tarifs femme et homme sont facultatifs : à défaut, le prix de base s’applique."
-          onClose={() => setServiceEditor(null)}
-        >
-          <form onSubmit={saveService} className="form-grid">
-            {serviceEditor.id === 'new' && <label className="field field-wide">Modèle de prestation
-              <select value="" onChange={(event) => applyServiceTemplate(event.target.value)}>
-                <option value="">Choisir un modèle (facultatif)</option>
-                {serviceTemplates.map((template) => <option key={template.name} value={template.name}>{template.name}</option>)}
-              </select>
-            </label>}
-            <label className="field">Nom<input required value={serviceEditor.form.name} onChange={(event) => setServiceField('name', event.target.value)} /></label>
-            <label className="field">Catégorie<input required value={serviceEditor.form.category} onChange={(event) => setServiceField('category', event.target.value)} /></label>
-            <label className="field">Prix de base ({currency})<input required type="number" min="0" step={priceStep} value={serviceEditor.form.price} onChange={(event) => setServiceField('price', event.target.value)} /></label>
-            <label className="field">Public cible
-              <select value={serviceEditor.form.audience} onChange={(event) => setServiceField('audience', event.target.value)}>
-                <option value="women">Femmes</option><option value="men">Hommes</option><option value="unisex">Mixte</option>
-              </select>
-            </label>
-            {serviceEditor.form.audience !== 'men' && <label className="field">Tarif femme (facultatif)<input type="number" min="0" step={priceStep} value={serviceEditor.form.womenPrice} onChange={(event) => setServiceField('womenPrice', event.target.value)} /></label>}
-            {serviceEditor.form.audience !== 'women' && <label className="field">Tarif homme (facultatif)<input type="number" min="0" step={priceStep} value={serviceEditor.form.menPrice} onChange={(event) => setServiceField('menPrice', event.target.value)} /></label>}
-            <label className="field field-wide">Description<textarea rows={2} value={serviceEditor.form.description} onChange={(event) => setServiceField('description', event.target.value)} /></label>
-            <div className="field-wide flex justify-end gap-2">
-              <button type="button" className="btn btn-secondary" onClick={() => setServiceEditor(null)}>Annuler</button>
               <button type="submit" className="btn btn-primary" disabled={saving}>{saving ? 'Enregistrement…' : 'Enregistrer'}</button>
             </div>
           </form>
@@ -526,18 +453,18 @@ export const BoutiquePage = () => {
         <Modal size="lg" title={`Mouvements de stock · ${history.product.name}`} description={`${history.product.quantityStock} en stock · seuil d’alerte ${history.product.lowStockThreshold}`} onClose={() => setHistory(null)}>
           {history.movements === null ? <p className="loading-line">Chargement…</p> : history.movements.length ? (
             <div className="overflow-x-auto">
-              <table className="data-table">
+              <table className="data-table compact-table">
                 <thead><tr><th>Date</th><th>Opération</th><th className="num">Quantité</th><th className="num">Stock après</th><th>Détail</th></tr></thead>
                 <tbody>{history.movements.map((movement) => <tr key={movement.id}>
                   <td className="whitespace-nowrap">{formatDateTime(movement.createdAt)}</td>
                   <td>{movementLabels[movement.reason]}</td>
-                  <td className="num"><span className={movement.type === 'in' ? 'text-green-700' : 'text-red-700'}>{movement.type === 'in' ? '+' : '−'}{movement.quantity}</span></td>
+                  <td className="num"><span className={movement.type === 'in' ? 'tone-profit' : 'tone-danger'}>{movement.type === 'in' ? '+' : '−'}{movement.quantity}</span></td>
                   <td className="num">{movement.stockAfter}</td>
                   <td><span className="cell-sub">{[movement.note, movement.userEmail].filter(Boolean).join(' · ') || '—'}</span></td>
                 </tr>)}</tbody>
               </table>
             </div>
-          ) : <EmptyState title="Aucun mouvement enregistré pour ce produit." hint="Les mouvements sont suivis depuis la mise à jour du logiciel." />}
+          ) : <EmptyState title="Aucun mouvement enregistré pour ce produit." />}
         </Modal>
       )}
     </section>

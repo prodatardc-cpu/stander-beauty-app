@@ -1,11 +1,13 @@
 import { DataTypes, Model } from 'sequelize';
 import { sequelize } from '../config/database';
+import type { Currency } from '../utils/money';
 
 // One settlement of a staff member's commissions; the commissions it covers point to it (paymentId).
 export class CommissionPayment extends Model {
   declare id: string;
   declare staffId: string;
   declare amount: number;
+  declare currency: Currency;
   declare requestedAmount: number;
   declare commissionCount: number;
   declare idempotencyKey: string;
@@ -24,6 +26,8 @@ CommissionPayment.init(
     // What was actually settled, and what the administrator asked to settle.
     amount: { type: DataTypes.DECIMAL(12, 2), allowNull: false },
     requestedAmount: { type: DataTypes.DECIMAL(12, 2), allowNull: false },
+    // A settlement only covers commissions of this currency.
+    currency: { type: DataTypes.STRING(3), allowNull: false },
     commissionCount: { type: DataTypes.INTEGER, allowNull: false },
     // Sent by the client for each payment intent: replaying it returns this payment instead of paying twice.
     idempotencyKey: { type: DataTypes.STRING(100), allowNull: false, unique: true },

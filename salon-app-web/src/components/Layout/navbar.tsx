@@ -4,7 +4,7 @@ import { logout } from '../../redux/slices/authSlice';
 import { useCurrentUser } from '../../hooks/useAuth';
 import { roleLabels } from '../../utils/format';
 import { ThemeToggle } from '../Common/ThemeToggle';
-import { pageTitles } from './sidebar';
+import { pageTitle } from './sidebar';
 
 export const Navbar = () => {
   const user = useCurrentUser();
@@ -21,7 +21,7 @@ export const Navbar = () => {
   return (
     <header className="studio-topbar">
       <div className="topbar-title">
-        <p className="topbar-caption">{pageTitles[pathname] ?? 'Stander Beauty'}</p>
+        <p className="topbar-caption">{pageTitle(pathname)}</p>
         <span className="topbar-date">{today}</span>
       </div>
       <div className="topbar-account">
