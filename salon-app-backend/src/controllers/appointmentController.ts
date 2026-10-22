@@ -1,5 +1,7 @@
 import type { Request, Response } from 'express';
 import { Op } from 'sequelize';
+import type { AuthRequest } from '../middleware/authMiddleware';
+import { actorOf, emitChangeLater } from '../services/realtime';
 import { settingsService } from '../services/settingsService';
 import { Appointment, type AppointmentStatus } from '../models/Appointment';
 import { Client } from '../models/Client';
@@ -9,6 +11,21 @@ import { isOptionalText, isUuid } from '../utils/validators';
 
 const statuses: AppointmentStatus[] = ['scheduled', 'confirmed', 'completed', 'cancelled', 'no_show'];
 const maxNotesLength = 1000;
+
+const statusLabels: Record<AppointmentStatus, string> = {
+  scheduled: 'prévu', confirmed: 'confirmé', completed: 'terminé', cancelled: 'annulé', no_show: 'client absent',
+};
+const appointmentTime = new Intl.DateTimeFormat('fr-FR', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+
+// "Coupe – Marie avec Aline, lun. 12 oct., 14:30", for the activity feed.
+const describeAppointment = async ({ clientId, staffId, serviceId, scheduledAt }: Pick<Appointment, 'clientId' | 'staffId' | 'serviceId' | 'scheduledAt'>) => {
+  const [client, staff, service] = await Promise.all([
+    Client.findByPk(clientId, { attributes: ['name'] }),
+    Staff.findByPk(staffId, { attributes: ['name'] }),
+    Service.findByPk(serviceId, { attributes: ['name'] }),
+  ]);
+  return `${service?.name ?? 'Rendez-vous'} – ${client?.name ?? 'client'} avec ${staff?.name ?? 'un membre de l’équipe'}, ${appointmentTime.format(scheduledAt)}`;
+};
 
 const isDate = (value: unknown): value is string => typeof value === 'string' && value.length <= 40 && !Number.isNaN(Date.parse(value));
 const activeStatuses: AppointmentStatus[] = ['scheduled', 'confirmed'];
@@ -74,7 +91,7 @@ export const appointmentController = {
     }
   },
 
-  create: async (req: Request, res: Response) => {
+  create: async (req: AuthRequest, res: Response) => {
     const { clientId, staffId, serviceId, scheduledAt, notes, allowOverlap } = req.body ?? {};
     if (![clientId, staffId, serviceId].every(isUuid) || !isDate(scheduledAt) || !isOptionalText(notes, maxNotesLength) ||
         (allowOverlap !== undefined && typeof allowOverlap !== 'boolean')) {
@@ -100,13 +117,17 @@ export const appointmentController = {
         currency: baseCurrency,
       });
       res.status(201).json(appointment);
+      emitChangeLater(async () => ({
+        type: 'appointment.created', entity: 'appointment', entityId: appointment.id,
+        summary: `Nouveau rendez-vous : ${await describeAppointment(appointment)}`,
+      }), actorOf(req.user));
     } catch {
       res.status(400).json({ error: 'Failed to create appointment; check the selected records' });
     }
   },
 
   // Only the schedule, the status, the notes, the staff member and the service can change.
-  update: async (req: Request, res: Response) => {
+  update: async (req: AuthRequest, res: Response) => {
     const id = req.params.id;
     if (!isUuid(id)) return res.status(400).json({ error: 'Invalid appointment ID' });
     const { status, scheduledAt, notes, staffId, serviceId, allowOverlap } = req.body ?? {};
@@ -135,6 +156,7 @@ export const appointmentController = {
       const priceChange = serviceId !== undefined && serviceId !== appointment.serviceId
         ? { price: service.price, currency: (await settingsService.get()).baseCurrency }
         : {};
+      const previousStatus = appointment.status;
       await appointment.update({
         ...priceChange,
         ...(status !== undefined && { status }),
@@ -144,19 +166,28 @@ export const appointmentController = {
         ...(serviceId !== undefined && { serviceId }),
       });
       res.json(appointment);
+      emitChangeLater(async () => ({
+        type: 'appointment.updated', entity: 'appointment', entityId: appointment.id,
+        summary: `${appointment.status !== previousStatus ? `Rendez-vous ${statusLabels[appointment.status]}` : 'Rendez-vous modifié'} : ${await describeAppointment(appointment)}`,
+      }), actorOf(req.user));
     } catch {
       res.status(400).json({ error: 'Failed to update appointment' });
     }
   },
 
-  remove: async (req: Request, res: Response) => {
+  remove: async (req: AuthRequest, res: Response) => {
     const id = req.params.id;
     if (!isUuid(id)) return res.status(400).json({ error: 'Invalid appointment ID' });
     try {
       const appointment = await Appointment.findByPk(id);
       if (!appointment) return res.status(404).json({ error: 'Appointment not found' });
+      const { clientId, staffId, serviceId, scheduledAt } = appointment;
       await appointment.destroy();
       res.json({ success: true, message: 'Appointment deleted successfully' });
+      emitChangeLater(async () => ({
+        type: 'appointment.deleted', entity: 'appointment', entityId: id,
+        summary: `Rendez-vous supprimé : ${await describeAppointment({ clientId, staffId, serviceId, scheduledAt })}`,
+      }), actorOf(req.user));
     } catch {
       res.status(500).json({ error: 'Failed to delete appointment' });
     }

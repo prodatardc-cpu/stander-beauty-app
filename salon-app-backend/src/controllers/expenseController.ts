@@ -2,6 +2,8 @@ import type { Request, Response } from 'express';
 import type { AuthRequest } from '../middleware/authMiddleware';
 import { Op } from 'sequelize';
 import { Expense } from '../models';
+import { dayKey } from '../services/operationsService';
+import { actorOf, describeAmount, emitChange } from '../services/realtime';
 import { settingsService } from '../services/settingsService';
 import { isCurrency } from '../utils/money';
 import { isText } from '../utils/validators';
@@ -39,7 +41,12 @@ export const expenseController = {
       // Paid in the salon's base currency unless the cashier says otherwise.
       const expenseCurrency = currency ?? (await settingsService.get()).baseCurrency;
       const expense = await Expense.create({ description: description.trim(), category: category.trim(), amount: Number(amount), currency: expenseCurrency, paymentMethod, createdByUserId: req.user?.id ?? null });
-      return res.status(201).json(expense);
+      res.status(201).json(expense);
+      emitChange({
+        type: 'expense.created', entity: 'expense', entityId: expense.id, currency: expenseCurrency, amount: Number(expense.amount),
+        summary: `Dépense : ${expense.description} – ${describeAmount(expense.amount, expenseCurrency)}`,
+      }, actorOf(req.user));
+      return;
     } catch {
       return res.status(400).json({ error: 'Failed to create expense' });
     }
@@ -61,7 +68,18 @@ export const expenseController = {
         const exists = await Expense.findByPk(id);
         return exists ? res.status(409).json({ error: 'Expense already cancelled' }) : res.status(404).json({ error: 'Expense not found' });
       }
-      return res.json({ success: true, expense: await Expense.findByPk(id) });
+      const expense = await Expense.findByPk(id);
+      res.json({ success: true, expense });
+      if (expense) {
+        const currency = isCurrency(expense.currency) ? expense.currency : null;
+        emitChange({
+          type: 'expense.cancelled', entity: 'expense', entityId: id, currency, amount: currency ? Number(expense.amount) : null,
+          day: dayKey(expense.createdAt),
+          summary: `Dépense annulée : ${expense.description}${currency ? ` – ${describeAmount(expense.amount, currency)}` : ''}` +
+            (expense.cancelReason ? ` (${expense.cancelReason})` : ''),
+        }, actorOf(req.user));
+      }
+      return;
     } catch {
       return res.status(500).json({ error: 'Failed to cancel expense' });
     }

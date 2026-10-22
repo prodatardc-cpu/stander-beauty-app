@@ -1,11 +1,21 @@
 import type { Request, Response, NextFunction } from 'express';
-import type { Role } from '../config/permissions';
+import { viewerWriteExceptions, type Role } from '../config/permissions';
 import { User } from '../models/User';
 import { verifyAuthToken } from '../services/authTokens';
 
 export interface AuthRequest extends Request {
   user?: { id: string; role: Role; email: string; authVersion: number; staffId: string | null; sessionStart: number };
 }
+
+const readMethods = ['GET', 'HEAD'];
+
+// A viewer account only reads: anything else is refused before reaching a route, whatever the
+// route's own role checks say. A trailing slash is ignored when matching the exceptions.
+export const isAllowedForViewer = (method: string, originalUrl: string) => {
+  if (readMethods.includes(method)) return true;
+  const path = originalUrl.split('?')[0].replace(/\/+$/, '');
+  return viewerWriteExceptions.some((exception) => exception.method === method && exception.path === path);
+};
 
 export const authMiddleware = async (
   req: AuthRequest,
@@ -36,6 +46,9 @@ export const authMiddleware = async (
     id: user.id, email: user.email, role: user.role, authVersion: user.authVersion,
     staffId: user.staffId ?? null, sessionStart: claims.sessionStart,
   };
+  if (user.role === 'viewer' && !isAllowedForViewer(req.method, req.originalUrl)) {
+    return res.status(403).json({ error: 'Read-only account' });
+  }
   return next();
 };
 

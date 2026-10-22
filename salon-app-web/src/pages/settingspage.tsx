@@ -12,8 +12,9 @@ import { PageHeader } from '../components/UI/PageHeader';
 import { Modal } from '../components/UI/Modal';
 
 const emptyPasswords = { currentPassword: '', newPassword: '', confirmPassword: '' };
-const emptyAccount = { email: '', password: '', role: 'staff' as 'staff' | 'cashier' };
-const assignableRoles = ['staff', 'cashier'] as const;
+const assignableRoles = ['staff', 'cashier', 'viewer'] as const;
+type AssignableRole = (typeof assignableRoles)[number];
+const emptyAccount = { email: '', password: '', role: 'staff' as AssignableRole };
 type BusinessForm = Pick<SalonSettings, 'businessName' | 'payPeriod'> & { businessEmail: string; businessPhone: string; taxId: string; businessAddress: string };
 const toBusinessForm = (settings: SalonSettings): BusinessForm => ({
   businessName: settings.businessName, payPeriod: settings.payPeriod,
@@ -294,14 +295,15 @@ export const SettingsPage = () => {
     </section>}
 
     {account && (
-      <Modal title="Créer un accès" description="L’administrateur reste unique : seuls les rôles Équipe et Caisse peuvent être attribués." onClose={() => setAccount(null)}>
+      <Modal title="Créer un accès" description="L’administrateur reste unique : seuls les rôles Équipe, Caisse et Observateur peuvent être attribués." onClose={() => setAccount(null)}>
         <form onSubmit={createAccount} className="form-grid">
           <label className="field field-wide">Adresse e-mail<input required type="email" autoComplete="off" value={account.email} onChange={(event) => setAccount({ ...account, email: event.target.value })} /></label>
           <label className="field">Mot de passe provisoire<input required minLength={8} type="password" autoComplete="new-password" value={account.password} onChange={(event) => setAccount({ ...account, password: event.target.value })} /><span className="field-hint">8 caractères minimum. La personne pourra le changer dans ses paramètres.</span></label>
           <label className="field">Rôle
-            <select value={account.role} onChange={(event) => setAccount({ ...account, role: event.target.value as 'staff' | 'cashier' })}>
+            <select value={account.role} onChange={(event) => setAccount({ ...account, role: event.target.value as AssignableRole })}>
               {assignableRoles.map((value) => <option key={value} value={value}>{roleLabels[value]}</option>)}
             </select>
+            {account.role === 'viewer' && <span className="field-hint">Lecture seule : suit le salon en direct (application mobile « Stander Beauty – Suivi ») sans rien pouvoir modifier.</span>}
           </label>
           <div className="field-wide flex justify-end gap-2">
             <button type="button" className="btn btn-secondary" onClick={() => setAccount(null)}>Annuler</button>

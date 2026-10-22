@@ -7,10 +7,10 @@ type Role = User['role'];
 const policy = {
   recordAttendance: ['admin', 'cashier'],
   closeDay: ['admin', 'cashier'],
-  readAnyStaffFinancials: ['admin'],
+  readAnyStaffFinancials: ['admin', 'viewer'],
   manageSettings: ['admin'],
   cancelSales: ['admin'],
-  readHistory: ['admin', 'cashier'],
+  readHistory: ['admin', 'cashier', 'viewer'],
   recordCash: ['admin', 'cashier'],
   payCommissions: ['admin'],
 } as const satisfies Record<string, readonly Role[]>;

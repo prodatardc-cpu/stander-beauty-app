@@ -360,7 +360,7 @@ export const CashierPage = () => {
 
       {loading ? <p className="loading-line">Chargement de la caisse…</p> : <div className="till-grid">
         <form onSubmit={checkout} className="panel till-panel">
-          <div className="panel-header"><h2 className="section-title">Nouvelle vente</h2>{cart.length > 0 && <button type="button" className="link-button is-danger" onClick={() => setCart([])}>Vider</button>}</div>
+          <div className="panel-header"><h2 className="section-title">Nouvelle vente / prestation</h2>{cart.length > 0 && <button type="button" className="link-button is-danger" onClick={() => setCart([])}>Vider</button>}</div>
           <div className="till-fields">
             <label className="field">Client
               <select value={clientId} onChange={(event) => { setClientId(event.target.value); if (event.target.value) setGuestClientName(''); }}>

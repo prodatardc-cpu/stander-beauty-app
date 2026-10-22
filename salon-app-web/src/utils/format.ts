@@ -17,7 +17,7 @@ export const paymentMethodLabels: Record<Sale['paymentMethod'], string> = {
   other: 'Autre',
 };
 
-export const roleLabels = { admin: 'Administrateur', cashier: 'Caisse', staff: 'Équipe' } as const;
+export const roleLabels = { admin: 'Administrateur', cashier: 'Caisse', staff: 'Équipe', viewer: 'Observateur' } as const;
 
 // YYYY-MM-DD in the browser's local time zone (what <input type="date"> uses).
 export const toLocalDateInput = (date: Date) => {

@@ -1,8 +1,10 @@
+import http from 'node:http';
 import { createApp } from './app';
 import { connectDB, describeDatabaseError } from './config/database';
 import { checkConfiguration, isProduction } from './config/env';
 import { ensureAdminAccount } from './controllers/authController';
 import { assertMigrationsApplied, runMigrations } from './db/migrator';
+import { attachRealtime } from './services/realtime';
 
 const PORT = Number.parseInt(process.env.PORT || '3000', 10);
 // Development applies pending migrations at startup; production only checks them unless
@@ -17,7 +19,10 @@ const startServer = async () => {
     if (autoMigrate) await runMigrations();
     else await assertMigrationsApplied();
     await ensureAdminAccount();
-    createApp().listen(PORT, () => {
+    // One HTTP server for the REST API and the real-time events (Socket.IO, path /socket.io).
+    const server = http.createServer(createApp());
+    attachRealtime(server);
+    server.listen(PORT, () => {
       console.log(`✅ Server running on http://localhost:${PORT}`);
     });
   } catch (error) {

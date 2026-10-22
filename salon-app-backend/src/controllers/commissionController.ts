@@ -2,6 +2,7 @@ import type { Request, Response } from 'express';
 import type { AuthRequest } from '../middleware/authMiddleware';
 import { commissionService } from '../services/commissionServices';
 import { PayrollError, recordPayout, summarizePay } from '../services/payrollService';
+import { actorOf, describeAmount, emitChange } from '../services/realtime';
 import { currencies, isCurrency } from '../utils/money';
 import { isUuid } from '../utils/validators';
 
@@ -86,6 +87,12 @@ export const commissionController = {
         remaining: pay.byCurrency[currency].remaining,
         replayed,
       });
+      if (!replayed) {
+        emitChange({
+          type: 'payroll.payout', entity: 'payout', entityId: payout.id, staffId, currency: payout.currency, amount: Number(payout.amount),
+          summary: `Paiement versé à ${pay.name} – ${describeAmount(payout.amount, payout.currency)}`,
+        }, actorOf(req.user));
+      }
     } catch (error) {
       if (error instanceof PayrollError) return res.status(error.status).json({ error: error.message });
       res.status(500).json({ error: 'Failed to pay commission' });

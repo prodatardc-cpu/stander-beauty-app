@@ -6,7 +6,7 @@ export class User extends Model {
   declare id: string;
   declare email: string;
   declare passwordHash: string;
-  declare role: 'admin' | 'staff' | 'cashier';
+  declare role: 'admin' | 'staff' | 'cashier' | 'viewer';
   declare status: 'active' | 'inactive';
   declare staffId: string | null;
   declare authVersion: number;
@@ -38,7 +38,8 @@ User.init(
       allowNull: false,
     },
     role: {
-      type: DataTypes.ENUM('admin', 'staff', 'cashier'),
+      // 'viewer' is added to existing databases by migration 009-viewer-role.
+      type: DataTypes.ENUM('admin', 'staff', 'cashier', 'viewer'),
       defaultValue: 'staff',
     },
     status: {

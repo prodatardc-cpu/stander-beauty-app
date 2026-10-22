@@ -4,6 +4,7 @@ import { CashAdjustment, CashCount } from '../models';
 import { historyService } from '../services/historyService';
 import { collectPeriod, dayKey, dayRange, journalOf } from '../services/operationsService';
 import { PayrollError, recordPayout, staffActivity, summarizePay } from '../services/payrollService';
+import { actorOf, describeAmount, emitChange } from '../services/realtime';
 import { isCurrency, roundMoney } from '../utils/money';
 import { isUuid } from '../utils/validators';
 
@@ -66,6 +67,10 @@ export const operationsController = {
         direction, amount: roundMoney(amount, currency), currency, paymentMethod, reason: text.value, userId: req.user?.id ?? null,
       });
       res.status(201).json(adjustment);
+      emitChange({
+        type: 'cash.adjustment', entity: 'cash', entityId: adjustment.id, currency, amount: Number(adjustment.amount),
+        summary: `${direction === 'in' ? 'Entrée' : 'Sortie'} de caisse : ${adjustment.reason} – ${describeAmount(adjustment.amount, currency)}`,
+      }, actorOf(req.user));
     } catch {
       res.status(500).json({ error: 'Failed to record the cash movement' });
     }
@@ -89,7 +94,13 @@ export const operationsController = {
         day, currency, expectedAmount: roundMoney(expected, currency), countedAmount: roundMoney(countedAmount, currency),
         note: text.value, userId: req.user?.id ?? null,
       });
-      res.status(201).json({ ...count.toJSON(), difference: roundMoney(Number(count.countedAmount) - Number(count.expectedAmount), currency) });
+      const difference = roundMoney(Number(count.countedAmount) - Number(count.expectedAmount), currency);
+      res.status(201).json({ ...count.toJSON(), difference });
+      emitChange({
+        type: 'cash.count', entity: 'cash', entityId: count.id, currency, amount: Number(count.countedAmount), day,
+        summary: `Comptage de caisse : ${describeAmount(count.countedAmount, currency)} compté, ${describeAmount(count.expectedAmount, currency)} attendu` +
+          (difference === 0 ? ' (sans écart)' : ` (écart ${difference > 0 ? '+' : '−'}${describeAmount(Math.abs(difference), currency)})`),
+      }, actorOf(req.user));
     } catch {
       res.status(500).json({ error: 'Failed to record the cash count' });
     }
@@ -135,6 +146,12 @@ export const operationsController = {
       });
       const [pay] = await summarizePay([staffId]);
       res.status(replayed ? 200 : 201).json({ payout, replayed, pay });
+      if (!replayed) {
+        emitChange({
+          type: 'payroll.payout', entity: 'payout', entityId: payout.id, staffId, currency: payout.currency, amount: Number(payout.amount),
+          summary: `${payout.kind === 'advance' ? 'Avance versée' : 'Paiement versé'} à ${pay?.name ?? 'un membre de l’équipe'} – ${describeAmount(payout.amount, payout.currency)}`,
+        }, actorOf(req.user));
+      }
     } catch (error) {
       if (error instanceof PayrollError) return res.status(error.status).json({ error: error.message });
       res.status(500).json({ error: 'Failed to record the payment' });

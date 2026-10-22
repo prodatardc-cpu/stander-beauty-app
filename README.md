@@ -85,21 +85,36 @@ identifiants du `.env`) et refusent toute base dont le nom ne finit pas par `_te
 Appliquées par l'API (`salon-app-backend/src/config/permissions.ts`) ; l'interface masque seulement
 les actions non autorisées.
 
-| Action | Administrateur | Caisse | Équipe |
-| --- | :---: | :---: | :---: |
-| Encaisser, encaisser une dette, dépenses (saisie), clients et rendez-vous | ✓ | ✓ | ✓ |
-| Consulter catalogue, équipe, ventes, reçus, rapports des ventes et des dettes | ✓ | ✓ | ✓ |
-| Enregistrer les présences | ✓ | ✓ | lecture |
-| Historique journalier, rapport de caisse, entrées/sorties et comptage de caisse | ✓ | ✓ | — |
-| Clôturer la journée | ✓ | ✓ | — |
-| Fiche de rémunération d'un membre (prestations, commissions, versements) | tous | sa fiche liée | sa fiche liée |
-| Rapport de l'équipe, payer une rémunération ou une avance | ✓ | — | — |
-| Archiver/restaurer un client, modifier ses points fidélité | ✓ | — | — |
-| Catalogue, équipe, comptes, annulations de vente et de dépense, clôture d'exercice | ✓ | — | — |
-| Devise de base, taux USD/CDF, coordonnées de l'établissement, période de rémunération | ✓ | lecture | lecture |
+| Action | Administrateur | Caisse | Équipe | Observateur |
+| --- | :---: | :---: | :---: | :---: |
+| Encaisser, encaisser une dette, dépenses (saisie), clients et rendez-vous | ✓ | ✓ | ✓ | lecture |
+| Consulter catalogue, équipe, ventes, reçus, rapports des ventes et des dettes | ✓ | ✓ | ✓ | ✓ |
+| Enregistrer les présences | ✓ | ✓ | lecture | lecture |
+| Historique journalier, rapport de caisse, entrées/sorties et comptage de caisse | ✓ | ✓ | — | lecture |
+| Clôturer la journée | ✓ | ✓ | — | — |
+| Fiche de rémunération d'un membre (prestations, commissions, versements) | tous | sa fiche liée | sa fiche liée | tous (lecture) |
+| Rapport de l'équipe, payer une rémunération ou une avance | ✓ | — | — | rapport (lecture) |
+| Mouvements de stock d'un produit | ✓ | — | — | lecture |
+| Archiver/restaurer un client, modifier ses points fidélité | ✓ | — | — | — |
+| Catalogue, équipe, comptes, annulations de vente et de dépense, clôture d'exercice | ✓ | — | — | — |
+| Devise de base, taux USD/CDF, coordonnées de l'établissement, période de rémunération | ✓ | lecture | lecture | lecture |
 
 Un accès « Caisse » ou « Équipe » voit sa propre fiche de rémunération une fois relié à sa fiche de
 l'équipe (Paramètres → Comptes utilisateurs → Fiche équipe).
+
+Un accès « Observateur » (rôle `viewer`) lit tout ce que lit l'administrateur et n'écrit rien : l'API
+refuse avec 403 « Read-only account » toute requête autre que GET/HEAD, sauf le changement de son
+propre mot de passe et « se déconnecter partout ». Il sert à l'application mobile
+« Stander Beauty – Suivi » (dépôt `Stander-beauty-app-mobile`).
+
+## Temps réel
+
+L'API diffuse chaque modification enregistrée (vente, dépense, rendez-vous, stock, caisse, paie,
+clôture, paramètres…) par Socket.IO sur le même serveur (`/socket.io`, jeton JWT dans
+`auth.token`), une fois la transaction validée. Chaque compte ne reçoit que ce qu'il a le droit de
+lire. Les événements sont gardés en mémoire (200 derniers) et dans la table `activity_events`
+(90 jours) ; `GET /api/activity?since=<date ISO>` permet de rattraper ceux manqués. Les réponses des
+routes existantes sont inchangées. Derrière un proxy, autoriser les WebSockets (en-têtes `Upgrade`).
 
 ## Données financières
 

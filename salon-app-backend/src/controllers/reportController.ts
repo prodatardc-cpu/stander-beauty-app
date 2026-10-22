@@ -9,6 +9,7 @@ import { Staff } from '../models/Staff';
 import { policy, type Role } from '../config/permissions';
 import type { AuthRequest } from '../middleware/authMiddleware';
 import { ReportArchive } from '../models/ReportArchive';
+import { actorOf, emitChange } from '../services/realtime';
 import { reportService } from '../services/reportService';
 import { settingsService } from '../services/settingsService';
 import { isCurrency } from '../utils/money';
@@ -173,13 +174,18 @@ export const reportController = {
       const allowed: readonly Role[] = archive.kind === 'annual' ? policy.closeYear : policy.closeDay;
       if (!req.user || !allowed.includes(req.user.role)) return res.status(403).json({ error: 'Access denied' });
       await archive.destroy();
-      return res.json({ message: 'Report archive deleted' });
+      res.json({ message: 'Report archive deleted' });
+      emitChange({
+        type: 'archive.deleted', entity: 'archive', entityId: archive.id, day: archive.kind === 'daily' ? archive.periodKey : null,
+        summary: archive.kind === 'annual' ? `Clôture de l’exercice ${archive.periodKey} supprimée` : `Clôture de la journée du ${archive.periodKey} supprimée`,
+      }, actorOf(req.user));
+      return;
     } catch {
       return res.status(500).json({ error: 'Failed to delete the report archive' });
     }
   },
 
-  closeDay: async (req: Request, res: Response) => {
+  closeDay: async (req: AuthRequest, res: Response) => {
     const date = req.body?.date;
     if (typeof date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return res.status(400).json({ error: 'A valid date in YYYY-MM-DD format is required' });
     const [year, month, day] = date.split('-').map(Number);
@@ -196,13 +202,17 @@ export const reportController = {
         where: { kind: 'daily', periodKey: date },
         defaults: await archiveDefaults('daily', date, periodStart, periodEnd),
       });
-      return res.status(created ? 201 : 200).json({ archive, alreadyClosed: !created });
+      res.status(created ? 201 : 200).json({ archive, alreadyClosed: !created });
+      if (created) {
+        emitChange({ type: 'day.closed', entity: 'archive', entityId: archive.id, day: date, summary: `Journée du ${date} clôturée` }, actorOf(req.user));
+      }
+      return;
     } catch {
       return res.status(500).json({ error: 'Failed to close the daily report' });
     }
   },
 
-  closeYear: async (req: Request, res: Response) => {
+  closeYear: async (req: AuthRequest, res: Response) => {
     const rawYear = req.body?.year;
     const year = typeof rawYear === 'number' ? rawYear : Number(rawYear);
     const now = new Date();
@@ -217,7 +227,11 @@ export const reportController = {
         where: { kind: 'annual', periodKey },
         defaults: await archiveDefaults('annual', periodKey, periodStart, periodEnd),
       });
-      return res.status(created ? 201 : 200).json({ archive, alreadyClosed: !created, historyPreserved: true });
+      res.status(created ? 201 : 200).json({ archive, alreadyClosed: !created, historyPreserved: true });
+      if (created) {
+        emitChange({ type: 'year.closed', entity: 'archive', entityId: archive.id, summary: `Exercice ${periodKey} clôturé` }, actorOf(req.user));
+      }
+      return;
     } catch {
       return res.status(500).json({ error: 'Failed to close the annual report' });
     }

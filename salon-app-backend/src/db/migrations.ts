@@ -340,4 +340,46 @@ export const migrations: Migration[] = [
       await sequelize.query('ALTER TABLE "products" ALTER COLUMN "imageUrl" TYPE TEXT', { transaction });
     },
   },
+  {
+    // Read-only "viewer" accounts (Observateur), used by the mobile follow-up app. users.role is a
+    // PostgreSQL enum created by sequelize.sync (normally "enum_users_role"); its actual type is read
+    // from the catalogue. ADD VALUE is accepted inside a transaction since PostgreSQL 12 (the value
+    // only becomes usable once it commits, which is all that is needed here).
+    name: '009-viewer-role',
+    up: async ({ sequelize, transaction }) => {
+      const [column] = await sequelize.query<{ typname: string; typtype: string }>(
+        `SELECT t.typname, t.typtype FROM pg_attribute a JOIN pg_type t ON t.oid = a.atttypid
+         WHERE a.attrelid = to_regclass('users') AND a.attname = 'role' AND NOT a.attisdropped`,
+        { type: QueryTypes.SELECT, transaction }
+      );
+      // A text column (never created by this API) accepts the new value as it is.
+      if (column?.typtype !== 'e') return;
+      await sequelize.query(`ALTER TYPE ${quote(column.typname)} ADD VALUE IF NOT EXISTS 'viewer'`, { transaction });
+    },
+  },
+  {
+    // Journal of the changes broadcast in real time (services/realtime.ts), kept so that devices
+    // catch up after a disconnection or a server restart (GET /activity). No foreign keys: an event
+    // outlives the record it describes (deleted appointment, archived client…).
+    name: '010-activity-events',
+    up: async ({ sequelize, transaction }) => {
+      const run = (sql: string) => sequelize.query(sql, { transaction });
+      await run(`CREATE TABLE IF NOT EXISTS "activity_events" (
+        "id" UUID PRIMARY KEY,
+        "type" VARCHAR(60) NOT NULL,
+        "entity" VARCHAR(40) NOT NULL,
+        "entityId" VARCHAR(64),
+        "at" TIMESTAMPTZ NOT NULL,
+        "actorEmail" VARCHAR(254),
+        "actorRole" VARCHAR(20),
+        "summary" VARCHAR(255) NOT NULL,
+        "currency" VARCHAR(3) CHECK ("currency" IN ('USD', 'CDF')),
+        "amount" DECIMAL(14, 2),
+        "day" VARCHAR(10),
+        "audience" VARCHAR(10) NOT NULL CHECK ("audience" IN ('everyone', 'history', 'payroll')),
+        "staffId" UUID
+      )`);
+      await run('CREATE INDEX IF NOT EXISTS "activity_events_at" ON "activity_events" ("at")');
+    },
+  },
 ];

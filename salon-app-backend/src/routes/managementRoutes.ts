@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { policy } from '../config/permissions';
+import { activityController } from '../controllers/activityController';
 import { appointmentController } from '../controllers/appointmentController';
 import { attendanceController } from '../controllers/attendanceController';
 import { expenseController } from '../controllers/expenseController';
@@ -16,6 +17,7 @@ const manageCatalog = requireRole(policy.manageCatalog);
 
 router.use(authMiddleware);
 for (const name of ['id', 'staffId', 'serviceId', 'productId']) router.param(name, uuidParam);
+router.get('/activity', activityController.list);
 router.get('/settings', settingsController.get);
 router.put('/settings', requireRole(policy.manageSettings), settingsController.update);
 router.get('/staff', resourceController.listStaff);
@@ -33,7 +35,7 @@ router.get('/products', resourceController.listProducts);
 router.post('/products', manageCatalog, resourceController.createProduct);
 router.post('/products/:id/stock', manageCatalog, resourceController.receiveProductStock);
 router.post('/products/:id/adjust', manageCatalog, resourceController.adjustProductStock);
-router.get('/products/:id/movements', manageCatalog, resourceController.listProductMovements);
+router.get('/products/:id/movements', requireRole(policy.readStockMovements), resourceController.listProductMovements);
 router.patch('/products/:id', manageCatalog, resourceController.updateProduct);
 router.delete('/products/:id', manageCatalog, resourceController.deleteProduct);
 router.get('/services', resourceController.listServices);

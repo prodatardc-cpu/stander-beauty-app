@@ -1,8 +1,13 @@
 import type { Request, Response } from 'express';
 import { sequelize } from '../config/database';
+import type { AuthRequest } from '../middleware/authMiddleware';
 import { Attendance, type AttendanceStatus } from '../models/Attendance';
 import { Staff } from '../models/Staff';
+import { actorOf, emitChange } from '../services/realtime';
 import { isUuid } from '../utils/validators';
+
+const dayLabel = (date: string) =>
+  new Intl.DateTimeFormat('fr-FR', { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'UTC' }).format(new Date(`${date}T00:00:00.000Z`));
 
 const getWorkDate = (value: unknown): string | null => {
   if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
@@ -24,7 +29,7 @@ export const attendanceController = {
     }
   },
 
-  saveForDate: async (req: Request, res: Response) => {
+  saveForDate: async (req: AuthRequest, res: Response) => {
     const date = getWorkDate(req.params.date);
     if (!date) return res.status(400).json({ error: 'Choose a valid date from Monday to Saturday' });
     if (!Array.isArray(req.body?.entries) || req.body.entries.length > 500) return res.status(400).json({ error: 'Attendance entries are required' });
@@ -66,6 +71,11 @@ export const attendanceController = {
       });
 
       res.json(await Attendance.findAll({ where: { attendanceDate: date } }));
+      const present = entries.filter((entry) => entry.status === 'present').length;
+      emitChange({
+        type: 'attendance.saved', entity: 'attendance', entityId: date, day: date,
+        summary: `Présences du ${dayLabel(date)} : ${present} présent${present > 1 ? 's' : ''}, ${entries.length - present} absent${entries.length - present > 1 ? 's' : ''}`,
+      }, actorOf(req.user));
     } catch {
       res.status(500).json({ error: 'Failed to save attendance' });
     }

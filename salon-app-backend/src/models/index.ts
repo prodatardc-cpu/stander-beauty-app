@@ -17,6 +17,7 @@ import { SalePayment } from './SalePayment';
 import { StaffPayout } from './StaffPayout';
 import { CashAdjustment } from './CashAdjustment';
 import { CashCount } from './CashCount';
+import { ActivityEvent } from './ActivityEvent';
 
 // Relations
 // Financial and attendance history is protected: deleting a parent that still has history fails
@@ -53,4 +54,4 @@ Product.hasMany(StockMovement, { foreignKey: 'productId', as: 'movements' });
 StockMovement.belongsTo(Product, { foreignKey: 'productId' });
 
 export { User, Client, Staff, Attendance, Service, Product, Sale, SaleItem, Commission, CommissionPayment, Appointment, StockMovement, Expense, ReportArchive, SalonSettings,
-  SalePayment, StaffPayout, CashAdjustment, CashCount };
+  SalePayment, StaffPayout, CashAdjustment, CashCount, ActivityEvent };

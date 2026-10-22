@@ -6,10 +6,11 @@ import { Client } from '../models/Client';
 import { Product } from '../models/Product';
 import { commissionService } from '../services/commissionServices';
 import type { AuthRequest } from '../middleware/authMiddleware';
-import { cancelledVisibleSince, saleNames, userEmails } from '../services/operationsService';
+import { cancelledVisibleSince, dayKey, saleNames, userEmails } from '../services/operationsService';
+import { actorOf, describeAmount, emitChange, emitStockAlerts, receiptLabel } from '../services/realtime';
 import { settingsService } from '../services/settingsService';
 import { InsufficientStockError, stockService } from '../services/stockService';
-import { convertMoney, isCurrency, roundMoney } from '../utils/money';
+import { convertMoney, isCurrency, roundMoney, type Currency } from '../utils/money';
 import { isUuid } from '../utils/validators';
 
 const saleLimits = { items: 100, quantity: 1000, clientName: 120, reason: 255, unitPrice: 99_999_999 };
@@ -227,6 +228,15 @@ export const saleController = {
       // Re-read: the receipt number is assigned by the database.
       const saved = await Sale.findByPk(result.sale.id, { include: [{ association: 'items' }, { association: 'payments' }] });
       res.status(201).json({ ...saved!.toJSON(), stockAlerts: result.stockAlerts });
+      const { currency, totalAmount, remainingAmount } = result.sale;
+      const total = describeAmount(totalAmount, currency as Currency);
+      emitChange({
+        type: 'sale.created', entity: 'sale', entityId: result.sale.id, currency: currency as Currency, amount: Number(totalAmount),
+        summary: Number(remainingAmount) > 0
+          ? `Vente ${receiptLabel(saved?.receiptNumber)} – ${total} (reste dû ${describeAmount(remainingAmount, currency as Currency)})`
+          : `Vente ${receiptLabel(saved?.receiptNumber)} encaissée – ${total}`,
+      }, actorOf(req.user));
+      emitStockAlerts(result.stockAlerts, actorOf(req.user));
     } catch (error) {
       if (error instanceof SaleError) return res.status(error.status).json({ error: error.message });
       if (error instanceof InsufficientStockError) return res.status(400).json({ error: error.message });
@@ -357,6 +367,13 @@ export const saleController = {
       });
       const sale = await Sale.findByPk(id, { include: [{ association: 'items' }, { association: 'payments' }] });
       res.status(result.replayed ? 200 : 201).json({ sale, payment: result.payment, replayed: result.replayed });
+      if (!result.replayed && sale && isCurrency(sale.currency)) {
+        emitChange({
+          type: 'sale.payment_added', entity: 'sale', entityId: id, currency: sale.currency, amount: Number(result.payment.amount),
+          summary: `Dette réglée – vente ${receiptLabel(sale.receiptNumber)} : ${describeAmount(result.payment.amount, sale.currency)}` +
+            (Number(sale.remainingAmount) > 0 ? ` (reste dû ${describeAmount(sale.remainingAmount, sale.currency)})` : ' (soldée)'),
+        }, actorOf(req.user));
+      }
     } catch (error) {
       if (error instanceof SaleError) return res.status(error.status).json({ error: error.message });
       if (error instanceof Error && error.name === 'SequelizeUniqueConstraintError') {
@@ -374,6 +391,10 @@ export const saleController = {
         return sales.length;
       });
       res.json({ success: true, message: 'Completed sales were cancelled and inventory restored', cancelledSales });
+      emitChange({
+        type: 'sales.reset', entity: 'sale',
+        summary: `Annulation générale de la caisse : ${cancelledSales} vente${cancelledSales > 1 ? 's' : ''} annulée${cancelledSales > 1 ? 's' : ''}`,
+      }, actorOf(req.user));
     } catch (error) {
       res.status(500).json({ error: 'Failed to reset sales and cash register' });
     }
@@ -388,6 +409,13 @@ export const saleController = {
     try {
       const sale = await sequelize.transaction((transaction) => cancelSale(id, req.user?.id ?? null, parsed.reason, transaction));
       res.json({ success: true, message: 'Sale cancelled and inventory restored', sale });
+      const currency = isCurrency(sale.currency) ? sale.currency : null;
+      emitChange({
+        type: 'sale.cancelled', entity: 'sale', entityId: id, currency, amount: currency ? Number(sale.totalAmount) : null,
+        day: dayKey(sale.saleDate),
+        summary: `Vente ${receiptLabel(sale.receiptNumber)} annulée${currency ? ` – ${describeAmount(sale.totalAmount, currency)}` : ''}` +
+          (sale.cancelReason ? ` (${sale.cancelReason})` : ''),
+      }, actorOf(req.user));
     } catch (error) {
       if (error instanceof SaleError) return res.status(error.status).json({ error: error.message });
       res.status(500).json({ error: 'Failed to cancel sale' });

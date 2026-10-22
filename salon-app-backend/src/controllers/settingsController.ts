@@ -1,5 +1,6 @@
 import type { Request, Response } from 'express';
 import type { AuthRequest } from '../middleware/authMiddleware';
+import { actorOf, emitChange } from '../services/realtime';
 import { businessFields, SettingsError, settingsService } from '../services/settingsService';
 import { isCurrency } from '../utils/money';
 
@@ -50,7 +51,20 @@ export const settingsController = {
     const details = Object.fromEntries(businessFields.filter((field) => body[field] !== undefined)
       .map((field) => [field, typeof body[field] === 'string' && body[field].trim() ? body[field].trim() : null]));
     try {
-      res.json(await settingsService.update({ ...details, baseCurrency, usdToCdfRate, payPeriod: body.payPeriod }, req.user?.id ?? null));
+      const before = await settingsService.get();
+      const updated = await settingsService.update({ ...details, baseCurrency, usdToCdfRate, payPeriod: body.payPeriod }, req.user?.id ?? null);
+      res.json(updated);
+      const changes = [
+        ...(updated.baseCurrency !== before.baseCurrency ? [`devise de référence ${updated.baseCurrency}`] : []),
+        ...(updated.usdToCdfRate !== before.usdToCdfRate
+          ? [updated.usdToCdfRate ? `taux 1 USD = ${new Intl.NumberFormat('fr-FR').format(updated.usdToCdfRate)} CDF` : 'taux retiré'] : []),
+        ...(updated.payPeriod !== before.payPeriod ? [`paie ${updated.payPeriod === 'weekly' ? 'hebdomadaire' : 'mensuelle'}`] : []),
+        ...(businessFields.some((field) => updated[field] !== before[field]) ? ['coordonnées de l’établissement'] : []),
+      ];
+      emitChange({
+        type: 'settings.updated', entity: 'settings', entityId: null,
+        summary: changes.length ? `Paramètres modifiés : ${changes.join(', ')}` : 'Paramètres enregistrés',
+      }, actorOf(req.user));
     } catch (error) {
       if (error instanceof SettingsError) return res.status(error.status).json({ error: error.message });
       res.status(500).json({ error: 'Failed to update settings' });

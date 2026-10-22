@@ -1,6 +1,7 @@
 import { QueryTypes, Sequelize } from 'sequelize';
 import { sequelize } from '../../src/config/database';
 import { runMigrations } from '../../src/db/migrator';
+import { clearActivityBuffer, flushActivity } from '../../src/services/realtime';
 
 const databaseName = () => {
   const name = process.env.DB_NAME ?? '';
@@ -32,6 +33,9 @@ export const prepareDatabase = async () => {
 
 export const resetDatabase = async () => {
   databaseName();
+  // Activity events of the previous test are written after its responses: let them land first.
+  await flushActivity();
+  clearActivityBuffer();
   const tables = await sequelize.query<{ tablename: string }>(
     `SELECT tablename FROM pg_tables WHERE schemaname = current_schema() AND tablename <> 'schema_migrations'`,
     { type: QueryTypes.SELECT }
@@ -41,4 +45,7 @@ export const resetDatabase = async () => {
   }
 };
 
-export const closeDatabase = () => sequelize.close();
+export const closeDatabase = async () => {
+  await flushActivity();
+  await sequelize.close();
+};

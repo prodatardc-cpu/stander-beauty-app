@@ -1,17 +1,20 @@
-import type { Server } from 'node:http';
+import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { createApp } from '../../src/app';
+import { attachRealtime } from '../../src/services/realtime';
 
 type RequestOptions = { token?: string; body?: unknown; headers?: Record<string, string> };
 export type TestResponse = { status: number; headers: Headers; body: any };
 
-export const startTestServer = async (options?: Parameters<typeof createApp>[0]) => {
+// `realtime`: also serves the Socket.IO events on the same server, as src/server.ts does.
+export const startTestServer = async (options?: Parameters<typeof createApp>[0], { realtime = false } = {}) => {
   const app = createApp(options);
-  const server = await new Promise<Server>((resolve) => {
-    const listening = app.listen(0, '127.0.0.1', () => resolve(listening));
-  });
+  const server = http.createServer(app);
+  const events = realtime ? attachRealtime(server) : null;
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
   const { port } = server.address() as AddressInfo;
-  const baseUrl = `http://127.0.0.1:${port}/api`;
+  const origin = `http://127.0.0.1:${port}`;
+  const baseUrl = `${origin}/api`;
 
   const request = async (method: string, path: string, { token, body, headers }: RequestOptions = {}): Promise<TestResponse> => {
     const response = await fetch(`${baseUrl}${path}`, {
@@ -33,12 +36,14 @@ export const startTestServer = async (options?: Parameters<typeof createApp>[0])
     return { status: response.status, headers: response.headers, body: parsed };
   };
 
-  const close = () => new Promise<void>((resolve) => {
+  const close = async () => {
     server.closeAllConnections();
-    server.close(() => resolve());
-  });
+    // Closing Socket.IO also closes the HTTP server.
+    if (events) return events.close();
+    return new Promise<void>((resolve) => server.close(() => resolve()));
+  };
 
-  return { baseUrl, request, close };
+  return { origin, baseUrl, request, close };
 };
 
 export type TestServer = Awaited<ReturnType<typeof startTestServer>>;

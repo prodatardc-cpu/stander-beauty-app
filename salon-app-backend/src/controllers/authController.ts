@@ -6,9 +6,11 @@ import type { AuthRequest } from '../middleware/authMiddleware';
 import { Staff } from '../models/Staff';
 import { User } from '../models/User';
 import { createAuthToken } from '../services/authTokens';
+import { disconnectUser } from '../services/realtime';
 import { isUuid } from '../utils/validators';
 
-const teamRoles = ['staff', 'cashier'] as const;
+// Roles the administrator can give; 'viewer' (Observateur) reads everything and writes nothing.
+const teamRoles = ['staff', 'cashier', 'viewer'] as const;
 
 // bcrypt ignores everything after 72 bytes: longer new passwords are refused rather than silently cut.
 const isAcceptablePassword = (value: unknown): value is string =>
@@ -116,6 +118,8 @@ export const authController = {
       return res.status(400).json({ error: 'Current password is incorrect' });
     }
     await user.update({ passwordHash: newPassword, authVersion: user.authVersion + 1 });
+    // Open real-time connections used the previous sessions: they reconnect with the new token.
+    disconnectUser(user.id);
     return res.json({ success: true, token: createAuthToken(user) });
   },
 
@@ -123,6 +127,7 @@ export const authController = {
     const user = req.user ? await User.findByPk(req.user.id) : null;
     if (!user) return res.status(401).json({ error: 'Account is unavailable' });
     await user.update({ authVersion: user.authVersion + 1 });
+    disconnectUser(user.id);
     return res.json({ success: true });
   },
 
@@ -137,6 +142,7 @@ export const authController = {
       if (!user) return res.status(404).json({ error: 'User not found' });
       if (user.role === 'admin') return res.status(400).json({ error: 'Use the administrator account password settings.' });
       await user.update({ passwordHash: newPassword, authVersion: user.authVersion + 1 });
+      disconnectUser(user.id);
       return res.json({ success: true });
     } catch {
       return res.status(500).json({ error: 'Failed to reset user password' });
@@ -156,7 +162,7 @@ export const authController = {
     const { email, password, role, staffId } = req.body ?? {};
     if (typeof email !== 'string' || email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim()) ||
         !isAcceptablePassword(password) || !teamRoles.includes(role)) {
-      return res.status(400).json({ error: `A valid email, ${passwordRule}, and a staff or cashier role are required.` });
+      return res.status(400).json({ error: `A valid email, ${passwordRule}, and a staff, cashier or viewer role are required.` });
     }
     try {
       const linkError = await staffLinkError(staffId);
@@ -191,6 +197,8 @@ export const authController = {
         ...(status !== undefined && { status }),
         ...(staffId !== undefined && { staffId }),
       });
+      // A blocked account loses its connections; a new role or staff record changes what it receives.
+      disconnectUser(user.id);
       return res.json(publicUser(user));
     } catch (error) {
       if (isUniqueViolation(error)) {

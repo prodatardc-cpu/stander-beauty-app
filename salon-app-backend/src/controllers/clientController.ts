@@ -4,6 +4,7 @@ import { sequelize } from '../config/database';
 import { hasRole, policy } from '../config/permissions';
 import type { AuthRequest } from '../middleware/authMiddleware';
 import { Appointment, Client, Sale } from '../models';
+import { actorOf, emitChange } from '../services/realtime';
 import { isOptionalText, isText, isUuid } from '../utils/validators';
 
 const limits = { name: 120, phone: 40, notes: 2000, search: 100, loyaltyPoints: 1_000_000 };
@@ -85,7 +86,7 @@ export const clientController = {
     }
   },
 
-  create: async (req: Request, res: Response) => {
+  create: async (req: AuthRequest, res: Response) => {
     const body = req.body ?? {};
     const invalid = fieldsError(body, false);
     if (invalid) return res.status(400).json({ error: invalid });
@@ -104,6 +105,7 @@ export const clientController = {
       });
 
       res.status(201).json(client);
+      emitChange({ type: 'client.created', entity: 'client', entityId: client.id, summary: `Nouveau client : ${client.name}` }, actorOf(req.user));
     } catch (error) {
       res.status(500).json({ error: 'Failed to create client' });
     }
@@ -142,6 +144,7 @@ export const clientController = {
       });
 
       res.json(client);
+      emitChange({ type: 'client.updated', entity: 'client', entityId: client.id, summary: `Fiche client modifiée : ${client.name}` }, actorOf(req.user));
     } catch (error) {
       res.status(500).json({ error: 'Failed to update client' });
     }
@@ -149,16 +152,18 @@ export const clientController = {
 
   // Never destroys financial history: a client with sales or appointments is archived (hidden from
   // lists, kept in reports); only a client without any history is deleted, inside one transaction.
-  remove: async (req: Request, res: Response) => {
+  remove: async (req: AuthRequest, res: Response) => {
     const id = req.params.id;
     if (!isUuid(id)) {
       return res.status(400).json({ error: 'Invalid client ID' });
     }
     try {
+      let name = '';
       const outcome = await sequelize.transaction(async (transaction) => {
         // Sales lock the client row too, so no sale can be recorded for it while this runs.
         const client = await Client.findByPk(id, { transaction, lock: transaction.LOCK.UPDATE });
         if (!client) return null;
+        name = client.name;
         const sales = await Sale.count({ where: { clientId: id }, transaction });
         const appointments = await Appointment.count({ where: { clientId: id }, transaction });
         if (sales === 0 && appointments === 0) {
@@ -174,12 +179,15 @@ export const clientController = {
         outcome,
         message: outcome === 'deleted' ? 'Client deleted (no history)' : 'Client archived; sales and appointments are kept',
       });
+      emitChange(outcome === 'deleted'
+        ? { type: 'client.deleted', entity: 'client', entityId: id, summary: `Client supprimé (sans historique) : ${name}` }
+        : { type: 'client.archived', entity: 'client', entityId: id, summary: `Client archivé : ${name}` }, actorOf(req.user));
     } catch (error) {
       res.status(500).json({ error: 'Failed to delete client' });
     }
   },
 
-  restore: async (req: Request, res: Response) => {
+  restore: async (req: AuthRequest, res: Response) => {
     const id = req.params.id;
     if (!isUuid(id)) {
       return res.status(400).json({ error: 'Invalid client ID' });
@@ -187,8 +195,10 @@ export const clientController = {
     try {
       const client = await Client.findByPk(id);
       if (!client) return res.status(404).json({ error: 'Client not found' });
+      const wasArchived = Boolean(client.archivedAt);
       if (client.archivedAt) await client.update({ archivedAt: null });
       res.json(client);
+      if (wasArchived) emitChange({ type: 'client.restored', entity: 'client', entityId: id, summary: `Client restauré : ${client.name}` }, actorOf(req.user));
     } catch (error) {
       res.status(500).json({ error: 'Failed to restore client' });
     }

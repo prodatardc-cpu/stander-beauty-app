@@ -3,7 +3,8 @@ import type { Currency } from '../services/currency';
 export interface User {
   id: string;
   email: string;
-  role: "admin" | "staff" | "cashier";
+  // viewer (Observateur): read-only account, used by the mobile follow-up app.
+  role: "admin" | "staff" | "cashier" | "viewer";
   status: "active" | "inactive";
   // Staff record linked by the administrator: gives access to that member's own commissions.
   staffId?: string | null;

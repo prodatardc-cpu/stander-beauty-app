@@ -3,6 +3,7 @@ import { Op } from 'sequelize';
 import { sequelize } from '../config/database';
 import { Appointment, Attendance, Commission, Product, Sale, SaleItem, Service, Staff, StockMovement, User } from '../models';
 import type { AuthRequest } from '../middleware/authMiddleware';
+import { actorOf, disconnectUser, emitChange, emitStockAlerts } from '../services/realtime';
 import { stockService } from '../services/stockService';
 import { isOptionalText, isText, isUuid } from '../utils/validators';
 
@@ -87,7 +88,7 @@ export const resourceController = {
     }
   },
 
-  createStaff: async (req: Request, res: Response) => {
+  createStaff: async (req: AuthRequest, res: Response) => {
     const body = req.body ?? {};
     const invalid = staffFieldsError(body, false);
     if (invalid) return res.status(400).json({ error: invalid });
@@ -97,12 +98,13 @@ export const resourceController = {
         photoUrl: body.photoUrl || null,
       });
       res.status(201).json(staff);
+      emitChange({ type: 'staff.created', entity: 'staff', entityId: staff.id, summary: `Nouveau membre de l’équipe : ${staff.name} (${staff.position})` }, actorOf(req.user));
     } catch {
       res.status(400).json({ error: 'Failed to create staff member' });
     }
   },
 
-  updateStaff: async (req: Request, res: Response) => {
+  updateStaff: async (req: AuthRequest, res: Response) => {
     const id = routeId(req);
     if (!id) return res.status(400).json({ error: 'Invalid staff ID' });
     const body = req.body ?? {};
@@ -116,6 +118,7 @@ export const resourceController = {
         ...(body.photoUrl !== undefined && { photoUrl: body.photoUrl || null }),
       });
       res.json(staff);
+      emitChange({ type: 'staff.updated', entity: 'staff', entityId: staff.id, summary: `Fiche équipe modifiée : ${staff.name}` }, actorOf(req.user));
     } catch {
       res.status(400).json({ error: 'Failed to update staff member' });
     }
@@ -123,19 +126,23 @@ export const resourceController = {
 
   // Never destroys sales, commissions or attendance: a member with history is archived (inactive,
   // hidden from lists, kept in reports). Everything happens in one transaction.
-  deleteStaff: async (req: Request, res: Response) => {
+  deleteStaff: async (req: AuthRequest, res: Response) => {
     const id = routeId(req);
     if (!isUuid(id)) return res.status(400).json({ error: 'Invalid staff ID' });
     try {
+      let name = '';
+      const blockedAccounts: string[] = [];
       const outcome = await sequelize.transaction(async (transaction) => {
         // Sales lock the staff row too, so nothing can be attributed to this member meanwhile.
         const staff = await Staff.findByPk(id, { transaction, lock: transaction.LOCK.UPDATE });
         if (!staff) return null;
+        name = staff.name;
 
         // Team accounts linked to this member lose access (sessions revoked) but are kept for the audit trail.
         const accounts = await User.findAll({ where: { staffId: id, role: { [Op.ne]: 'admin' } }, transaction, lock: transaction.LOCK.UPDATE });
         for (const account of accounts) {
           await account.update({ status: 'inactive', authVersion: account.authVersion + 1 }, { transaction });
+          blockedAccounts.push(account.id);
         }
 
         // Evaluated one after the other on the transaction's connection.
@@ -159,20 +166,26 @@ export const resourceController = {
         outcome,
         message: outcome === 'deleted' ? 'Staff member deleted (no history)' : 'Staff member archived; sales, commissions and attendance are kept',
       });
+      for (const accountId of blockedAccounts) disconnectUser(accountId);
+      emitChange(outcome === 'deleted'
+        ? { type: 'staff.deleted', entity: 'staff', entityId: id, summary: `Membre de l’équipe supprimé (sans historique) : ${name}` }
+        : { type: 'staff.archived', entity: 'staff', entityId: id, summary: `Membre de l’équipe archivé : ${name}` }, actorOf(req.user));
     } catch {
       res.status(500).json({ error: 'Failed to delete staff member' });
     }
   },
 
-  restoreStaff: async (req: Request, res: Response) => {
+  restoreStaff: async (req: AuthRequest, res: Response) => {
     const id = routeId(req);
     if (!isUuid(id)) return res.status(400).json({ error: 'Invalid staff ID' });
     try {
       const staff = await Staff.findByPk(id);
       if (!staff) return res.status(404).json({ error: 'Staff member not found' });
+      const wasArchived = Boolean(staff.archivedAt);
       // Comes back inactive: the administrator reactivates the member explicitly.
       if (staff.archivedAt) await staff.update({ archivedAt: null });
       res.json(staff);
+      if (wasArchived) emitChange({ type: 'staff.restored', entity: 'staff', entityId: id, summary: `Membre de l’équipe restauré : ${staff.name}` }, actorOf(req.user));
     } catch {
       res.status(500).json({ error: 'Failed to restore staff member' });
     }
@@ -186,7 +199,7 @@ export const resourceController = {
     }
   },
 
-  createProduct: async (req: Request, res: Response) => {
+  createProduct: async (req: AuthRequest, res: Response) => {
     const { name, sku, priceBuy, priceSell, quantityStock = 0, category, imageUrl, lowStockThreshold = 5, description } = req.body ?? {};
     if (typeof name !== 'string' || !name.trim() || typeof sku !== 'string' || !sku.trim() || typeof category !== 'string' || !category.trim() ||
         !Number.isFinite(Number(priceBuy)) || Number(priceBuy) < 0 || !Number.isFinite(Number(priceSell)) || Number(priceSell) < 0 ||
@@ -211,12 +224,16 @@ export const resourceController = {
         return created;
       });
       res.status(201).json(product);
+      emitChange({
+        type: 'product.created', entity: 'product', entityId: product.id,
+        summary: `Nouveau produit : ${product.name} (${product.quantityStock} en stock)`,
+      }, actorOf(req.user));
     } catch {
       res.status(400).json({ error: 'Failed to create product; check that the SKU is unique' });
     }
   },
 
-  updateProduct: async (req: Request, res: Response) => {
+  updateProduct: async (req: AuthRequest, res: Response) => {
     const id = routeId(req);
     if (!id) return res.status(400).json({ error: 'Invalid product ID' });
     try {
@@ -242,6 +259,7 @@ export const resourceController = {
       }
       await product.update(Object.fromEntries(Object.entries(body).map(([key, value]) => [key, typeof value === 'string' ? (key === 'sku' ? value.trim().toUpperCase() : value.trim()) : value])));
       res.json(product);
+      emitChange({ type: 'product.updated', entity: 'product', entityId: product.id, summary: `Produit modifié : ${product.name}` }, actorOf(req.user));
     } catch {
       res.status(400).json({ error: 'Failed to update product' });
     }
@@ -255,7 +273,12 @@ export const resourceController = {
     try {
       const product = await sequelize.transaction((transaction) => stockService.put(id, quantity, 'reception', { countAsReceived: true, note, userId: req.user?.id, transaction }));
       if (!product) return res.status(404).json({ error: 'Product not found' });
-      return res.json(product);
+      res.json(product);
+      emitChange({
+        type: 'product.stock_received', entity: 'product', entityId: product.id,
+        summary: `Réception de stock : ${product.name} +${quantity} (${product.quantityStock} en stock)`,
+      }, actorOf(req.user));
+      return;
     } catch {
       return res.status(400).json({ error: 'Failed to receive product stock' });
     }
@@ -267,9 +290,11 @@ export const resourceController = {
     const note = typeof req.body?.note === 'string' ? req.body.note.trim().slice(0, 255) : '';
     if (!id || !Number.isInteger(counted) || counted < 0 || !note) return res.status(400).json({ error: 'A product ID, non-negative count and adjustment reason are required' });
     try {
+      let stockBefore = 0;
       const product = await sequelize.transaction(async (transaction) => {
         const current = await Product.findByPk(id, { transaction, lock: transaction.LOCK.UPDATE });
         if (!current) return null;
+        stockBefore = Number(current.quantityStock);
         const difference = counted - Number(current.quantityStock);
         if (difference === 0) return current;
         return difference > 0
@@ -277,7 +302,16 @@ export const resourceController = {
           : stockService.take(id, -difference, 'adjustment', { note, userId: req.user?.id, transaction });
       });
       if (!product) return res.status(404).json({ error: 'Product not found' });
-      return res.json(product);
+      res.json(product);
+      if (Number(product.quantityStock) !== stockBefore) {
+        emitChange({
+          type: 'product.stock_adjusted', entity: 'product', entityId: product.id,
+          summary: `Inventaire : ${product.name} ${stockBefore} → ${product.quantityStock} (${note})`,
+        }, actorOf(req.user));
+        const alert = stockService.alertFor(product, stockBefore);
+        if (alert) emitStockAlerts([alert], actorOf(req.user));
+      }
+      return;
     } catch {
       return res.status(400).json({ error: 'Failed to adjust product stock' });
     }
@@ -298,7 +332,7 @@ export const resourceController = {
     }
   },
 
-  deleteProduct: async (req: Request, res: Response) => {
+  deleteProduct: async (req: AuthRequest, res: Response) => {
     const id = routeId(req);
     if (!id) return res.status(400).json({ error: 'Invalid product ID' });
     try {
@@ -307,12 +341,16 @@ export const resourceController = {
       if (await SaleItem.count({ where: { type: 'product', itemId: id } })) return res.status(409).json({ error: 'Product has sales history; deactivate it instead' });
       if (await StockMovement.count({ where: { productId: id } })) {
         await product.update({ status: 'inactive' });
-        return res.json({ success: true, deactivated: true });
+        res.json({ success: true, deactivated: true });
+        emitChange({ type: 'product.updated', entity: 'product', entityId: id, summary: `Produit retiré de la vente : ${product.name}` }, actorOf(req.user));
+        return;
       }
       await sequelize.transaction(async (transaction) => {
         await product.destroy({ transaction });
       });
-      return res.json({ success: true });
+      res.json({ success: true });
+      emitChange({ type: 'product.deleted', entity: 'product', entityId: id, summary: `Produit supprimé : ${product.name}` }, actorOf(req.user));
+      return;
     } catch {
       return res.status(500).json({ error: 'Failed to delete product' });
     }
@@ -326,7 +364,7 @@ export const resourceController = {
     }
   },
 
-  createService: async (req: Request, res: Response) => {
+  createService: async (req: AuthRequest, res: Response) => {
     const body = req.body ?? {};
     const invalid = serviceFieldsError(body, false);
     if (invalid) return res.status(400).json({ error: invalid });
@@ -336,12 +374,13 @@ export const resourceController = {
         ...audiencePrices(body),
       });
       res.status(201).json(service);
+      emitChange({ type: 'service.created', entity: 'service', entityId: service.id, summary: `Nouvelle prestation : ${service.name}` }, actorOf(req.user));
     } catch {
       res.status(400).json({ error: 'Failed to create service' });
     }
   },
 
-  updateService: async (req: Request, res: Response) => {
+  updateService: async (req: AuthRequest, res: Response) => {
     const id = routeId(req);
     if (!id) return res.status(400).json({ error: 'Invalid service ID' });
     const body = req.body ?? {};
@@ -355,6 +394,7 @@ export const resourceController = {
         ...audiencePrices(body),
       });
       res.json(service);
+      emitChange({ type: 'service.updated', entity: 'service', entityId: service.id, summary: `Prestation modifiée : ${service.name}` }, actorOf(req.user));
     } catch {
       res.status(400).json({ error: 'Failed to update service' });
     }
